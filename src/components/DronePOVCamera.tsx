@@ -27,6 +27,8 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
   const [zoom, setZoom] = useState<number>(1);
   const [visionMode, setVisionMode] = useState<'rgb' | 'flir' | 'nvg'>('rgb');
   const [isCrosshairLocked, setIsCrosshairLocked] = useState<boolean>(true);
+  const [streamFailed, setStreamFailed] = useState<boolean>(false);
+  const backendStreamUrl = `http://localhost:8000/api/v1/drones/${drone.id}/stream`;
 
   // Next waypoint target
   const nextWp = drone.route[drone.currentWaypointIndex + 1] || drone.route[drone.route.length - 1];
@@ -142,13 +144,23 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden flex flex-col select-none">
-      {/* Simulated Video Canvas */}
-      <canvas
-        ref={canvasRef}
-        width={1280}
-        height={720}
-        className="w-full h-full object-cover"
-      />
+      {/* Live Video Stream or Simulated Canvas Fallback */}
+      {!streamFailed ? (
+        <img
+          src={backendStreamUrl}
+          alt={`Live Stream ${drone.callsign}`}
+          onError={() => setStreamFailed(true)}
+          className="w-full h-full object-cover select-none"
+          style={{ transform: `scale(${zoom})`, transition: 'transform 0.2s ease-out' }}
+        />
+      ) : (
+        <canvas
+          ref={canvasRef}
+          width={1280}
+          height={720}
+          className="w-full h-full object-cover"
+        />
+      )}
 
       {/* Vision Mode Filter Overlay */}
       {visionMode === 'flir' && (

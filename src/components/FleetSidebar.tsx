@@ -242,6 +242,14 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
                       : `${drone.vitals.estimatedFlightTimeMinutes}m rem`}
                   </span>
                 </div>
+                <div className="flex items-center justify-between text-[10px] text-cyan-300 font-mono mt-1 pt-1 border-t border-[#1b253b]">
+                  <span className="truncate" title={drone.nextWaypointName || 'Approaching Corridor'}>
+                    Next WP: {drone.nextWaypointName || (drone.route[drone.currentWaypointIndex + 1]?.name) || 'Approaching Corridor'}
+                  </span>
+                  <span className="text-cyan-400 font-bold shrink-0 ml-1">
+                    WP-{(drone.currentWaypointIndex + 1).toString().padStart(2, '0')}
+                  </span>
+                </div>
               </div>
 
               {/* Airspace Zone & Proximity indicator */}

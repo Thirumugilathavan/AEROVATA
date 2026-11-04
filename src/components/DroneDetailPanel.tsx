@@ -53,7 +53,13 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
   selectedWaypointId,
   activeConflict,
 }) => {
-  const [activeTab, setActiveTab] = useState<'vitals' | 'obstacles' | 'airspace' | 'delivery' | 'waypoints' | 'controls'>('vitals');
+  const [activeTab, setActiveTab] = useState<'vitals' | 'obstacles' | 'airspace' | 'delivery' | 'waypoints' | 'controls'>('waypoints');
+
+  useEffect(() => {
+    if (selectedWaypointId) {
+      setActiveTab('waypoints');
+    }
+  }, [selectedWaypointId]);
 
   const getRtbBadge = (status: string) => {
     switch (status) {
@@ -614,41 +620,46 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                   const isSelected = wp.id === selectedWaypointId;
                   const isCurrent = idx === drone.currentWaypointIndex;
                   const isDone = wp.status === 'completed' || idx < drone.currentWaypointIndex;
+                  const isDest = idx === drone.route.length - 1 || wp.type === 'delivery';
+                  const wpNum = String(idx + 1).padStart(2, '0');
 
                   let cardStyle = 'border-slate-800 bg-[#0e1422] text-slate-400';
-                  if (isDone) {
-                    cardStyle = 'border-emerald-800/80 bg-emerald-950/20 text-emerald-300';
+                  if (isSelected) {
+                    cardStyle = 'border-cyan-400 bg-cyan-950/70 text-white ring-2 ring-cyan-400/60 shadow-[0_0_15px_rgba(6,182,212,0.4)]';
                   } else if (isCurrent) {
-                    cardStyle = 'border-cyan-400 bg-cyan-950/50 text-cyan-100 ring-2 ring-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]';
+                    cardStyle = 'border-cyan-400/90 bg-cyan-950/40 text-cyan-100 ring-1 ring-cyan-400/40 shadow-[0_0_10px_rgba(6,182,212,0.25)]';
+                  } else if (isDone) {
+                    cardStyle = 'border-emerald-800/80 bg-emerald-950/20 text-emerald-300';
                   }
 
                   return (
                     <div
                       key={wp.id}
                       onClick={() => onSelectWaypoint(wp.id)}
-                      className={`w-44 p-2.5 rounded-lg border ${cardStyle} cursor-pointer hover:border-cyan-500/70 transition-all flex flex-col justify-between shrink-0 select-none`}
+                      className={`w-48 p-2.5 rounded-lg border ${cardStyle} cursor-pointer hover:border-cyan-400 hover:bg-[#131d2e] transition-all flex flex-col justify-between shrink-0 select-none`}
                     >
                       <div className="flex items-center justify-between text-xs font-mono font-bold">
                         <span className="flex items-center gap-1.5">
                           {isDone ? (
-                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           ) : isCurrent ? (
-                            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+                            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
                           ) : (
-                            <Clock className="w-3.5 h-3.5 text-slate-500" />
+                            <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                           )}
-                          WP {idx + 1}
+                          <span className="font-extrabold text-white">WP-{wpNum}</span>
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.2 rounded uppercase font-bold ${
                           isDone ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
-                          isCurrent ? 'bg-cyan-900 text-cyan-300 border border-cyan-700' :
+                          isCurrent ? 'bg-cyan-900 text-cyan-300 border border-cyan-500 animate-pulse' :
+                          isDest ? 'bg-rose-950 text-rose-300 border border-rose-800' :
                           'bg-slate-800 text-slate-400'
                         }`}>
-                          {isCurrent ? 'ACTIVE LEG' : isDone ? 'PASSED' : wp.type}
+                          {isCurrent ? 'NEXT TARGET' : isDone ? 'PASSED' : isDest ? 'DEST PAD' : wp.type}
                         </span>
                       </div>
 
-                      <div className="my-1">
+                      <div className="my-1.5">
                         <div className="text-xs font-bold text-white truncate" title={wp.name}>
                           {wp.name}
                         </div>
@@ -658,8 +669,8 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                       </div>
 
                       <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-slate-400">AGL:</span>
-                        <span className="text-cyan-300 font-bold">{wp.altitudeMeters}m</span>
+                        <span className="text-slate-400">CORRIDOR:</span>
+                        <span className="text-cyan-300 font-bold">{wp.altitudeMeters}m AGL</span>
                       </div>
                     </div>
                   );

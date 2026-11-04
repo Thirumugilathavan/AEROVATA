@@ -27,7 +27,9 @@ import {
   ChevronDown,
   Sliders,
   ExternalLink,
-  Shield
+  Shield,
+  Crosshair,
+  Target
 } from 'lucide-react';
 import { 
   Drone, 
@@ -42,6 +44,7 @@ import type { Mission, MissionTelemetry, Checkpoint } from '../types/mission';
 import { AIRSPACE_CENTER } from '../data/mockFleet';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from '../data/officialAirspaceData';
+import { getDistanceMeters } from '../services/telemetryEngine';
 
 interface MapWorkspaceProps {
   drones: Drone[];
@@ -110,7 +113,7 @@ const buildMarkerHtml = (
       align-items: center;
       cursor: pointer;
       user-select: none;
-      transform: scale(${isSelected ? 1.15 : 1});
+      transform: scale(${isSelected ? 1.25 : 1});
       transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
       position: relative;
     ">
@@ -125,16 +128,17 @@ const buildMarkerHtml = (
       ">
         <div style="
           background: rgba(8, 12, 22, 0.95);
-          border: 1px solid ${hasThreat ? threatColor : (isSelected ? '#00f0ff' : '#22324d')};
+          border: ${isSelected ? '2px solid #00f0ff' : hasThreat ? `1px solid ${threatColor}` : '1px solid #22324d'};
           border-radius: 4px;
           padding: 3px 8px;
           display: flex;
           align-items: center;
           gap: 6px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.85), ${isSelected ? '0 0 10px rgba(0,240,255,0.45)' : 'none'};
+          box-shadow: 0 4px 12px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px rgba(0,240,255,0.7)' : 'none'};
           backdrop-filter: blur(8px);
           white-space: nowrap;
         ">
+          ${isSelected ? `<span style="background: #00f0ff; color: #020611; font-size: 8px; font-weight: 900; padding: 1px 4px; border-radius: 2px;">SELECTED</span>` : ''}
           <div style="
             width: 7px;
             height: 7px;
@@ -174,6 +178,20 @@ const buildMarkerHtml = (
         align-items: center;
         justify-content: center;
       ">
+        ${isSelected ? `
+          <div style="
+            position: absolute;
+            width: 82px;
+            height: 82px;
+            border-radius: 50%;
+            border: 2px solid #00f0ff;
+            background: radial-gradient(circle, rgba(0, 240, 255, 0.25) 0%, rgba(0, 240, 255, 0.05) 60%, transparent 80%);
+            box-shadow: 0 0 22px #00f0ff, inset 0 0 14px rgba(0, 240, 255, 0.5);
+            animation: pulse 1.5s infinite;
+            pointer-events: none;
+            z-index: 1;
+          "></div>
+        ` : ''}
         <div style="
           position: absolute;
           width: 52px;
@@ -317,6 +335,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const destinationMarkersRef = useRef<{ [key: string]: maplibregl.Marker }>({});
   const checkpointMarkersRef = useRef<maplibregl.Marker[]>([]);
   const simDroneMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const prevSelectedDroneIdRef = useRef<string | null>(null);
 
   // 12-Layer System Controls
   const [layerSatellite, setLayerSatellite] = useState(true);
@@ -485,18 +504,56 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     }
   }, [viewMode]);
 
-  // Follow selected drone if autoFollow is enabled
+  // Handler: Locate / Focus Selected Drone on Demand
+  const handleFocusSelectedDrone = () => {
+    const map = mapRef.current;
+    if (!map || !selectedDroneId) return;
+    const drone = drones.find((d) => d.id === selectedDroneId);
+    if (drone) {
+      map.flyTo({
+        center: [drone.vitals.longitude, drone.vitals.latitude],
+        zoom: 15.4,
+        pitch: viewMode === '3d' ? 62 : 0,
+        bearing: viewMode === '3d' ? -25 : 0,
+        duration: 900,
+        essential: true,
+      });
+    }
+  };
+
+  // Smoothly locate & fly camera towards selected drone when selection changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !selectedDroneId || !autoFollow) return;
+    if (!map || !selectedDroneId || !isMapLoaded) return;
+
+    if (prevSelectedDroneIdRef.current !== selectedDroneId) {
+      prevSelectedDroneIdRef.current = selectedDroneId;
+      const drone = drones.find((d) => d.id === selectedDroneId);
+      if (drone) {
+        map.flyTo({
+          center: [drone.vitals.longitude, drone.vitals.latitude],
+          zoom: 15.2,
+          pitch: viewMode === '3d' ? 62 : 0,
+          bearing: viewMode === '3d' ? -25 : 0,
+          duration: 1000,
+          essential: true,
+        });
+      }
+    }
+  }, [selectedDroneId, drones, isMapLoaded, viewMode]);
+
+  // Continuous tracking when autoFollow is active
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selectedDroneId || !autoFollow || !isMapLoaded) return;
     const drone = drones.find((d) => d.id === selectedDroneId);
     if (drone) {
       map.easeTo({
         center: [drone.vitals.longitude, drone.vitals.latitude],
-        duration: 400,
+        duration: 350,
       });
     }
-  }, [drones, selectedDroneId, autoFollow]);
+  }, [drones, selectedDroneId, autoFollow, isMapLoaded]);
 
   // Initialize all vector layers
   const initMapLayers = (map: maplibregl.Map) => {
@@ -868,9 +925,9 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         filter: ['==', ['get', 'type'], 'planned'],
         paint: {
           'line-color': ['get', 'color'],
-          'line-width': 2.4,
+          'line-width': ['coalesce', ['get', 'lineWidth'], 2.4],
           'line-dasharray': [3, 2],
-          'line-opacity': 0.85,
+          'line-opacity': ['coalesce', ['get', 'lineOpacity'], 0.85],
         },
       });
 
@@ -882,8 +939,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         filter: ['==', ['get', 'type'], 'trail'],
         paint: {
           'line-color': ['get', 'color'],
-          'line-width': 3.5,
-          'line-opacity': 0.95,
+          'line-width': ['coalesce', ['get', 'lineWidth'], 3.5],
+          'line-opacity': ['coalesce', ['get', 'lineOpacity'], 0.95],
         },
       });
     }
@@ -982,13 +1039,17 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     const features: any[] = [];
 
     drones.forEach((drone) => {
-      const color = DRONE_THEME_COLORS[drone.id] || '#00f0ff';
+      const isSelected = drone.id === selectedDroneId;
+      const themeColor = DRONE_THEME_COLORS[drone.id] || '#00f0ff';
+      const color = isSelected ? '#00f0ff' : themeColor;
+      const lineWidth = isSelected ? 5.5 : 2.0;
+      const lineOpacity = isSelected ? 1.0 : 0.35;
 
       // 1. Original route (faded if rerouted)
       if (drone.originalRoute && drone.originalRoute.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { color: '#94a3b8', type: 'original' },
+          properties: { color: '#94a3b8', type: 'original', lineWidth: 1.8, lineOpacity: 0.35 },
           geometry: {
             type: 'LineString',
             coordinates: drone.originalRoute.map((wp) => [wp.lng, wp.lat]),
@@ -1000,7 +1061,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (drone.route.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { color, type: 'planned' },
+          properties: { color, type: 'planned', lineWidth, lineOpacity, isSelected },
           geometry: {
             type: 'LineString',
             coordinates: drone.route.map((wp) => [wp.lng, wp.lat]),
@@ -1012,7 +1073,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (drone.flightTrail && drone.flightTrail.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { color, type: 'trail' },
+          properties: { color, type: 'trail', lineWidth: lineWidth * 0.85, lineOpacity: lineOpacity * 0.9 },
           geometry: {
             type: 'LineString',
             coordinates: drone.flightTrail,
@@ -1025,7 +1086,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       type: 'FeatureCollection',
       features,
     });
-  }, [drones, isMapLoaded]);
+  }, [drones, selectedDroneId, isMapLoaded]);
 
   // Update Proposed Replan Route
   useEffect(() => {
@@ -1162,46 +1223,122 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
     selectedDrone.route.forEach((wp, idx) => {
       const isSelected = wp.id === selectedWaypointId;
+      const wpNumber = String(idx + 1).padStart(2, '0');
+      const isCurrentLeg = idx === selectedDrone.currentWaypointIndex;
+      const isReached = wp.status === 'completed' || idx < selectedDrone.currentWaypointIndex;
+      const isDestination = idx === selectedDrone.route.length - 1 || wp.type === 'delivery';
+
+      const distToWp = Math.round(
+        getDistanceMeters(selectedDrone.vitals.latitude, selectedDrone.vitals.longitude, wp.lat, wp.lng)
+      );
+
       const el = document.createElement('div');
       el.className = 'waypoint-marker';
       el.style.cursor = 'pointer';
+      el.style.userSelect = 'none';
 
-      let bg = '#0f172a';
-      let border = '#00f0ff';
-      let textColor = '#38bdf8';
-      if (wp.status === 'completed') {
-        bg = '#064e3b';
-        border = '#10b981';
-        textColor = '#6ee7b7';
-      } else if (wp.status === 'active') {
-        bg = '#0891b2';
-        border = '#00f0ff';
-        textColor = '#ffffff';
-      } else if (wp.type === 'delivery') {
-        bg = '#831843';
-        border = '#f43f5e';
-        textColor = '#fda4af';
+      let statusBadge = '';
+      let borderStyle = '1.5px solid #00f0ff';
+      let bgStyle = 'rgba(10, 16, 28, 0.94)';
+      let pulseRing = '';
+
+      if (isReached) {
+        borderStyle = '1.5px solid #10b981';
+        bgStyle = 'rgba(6, 28, 18, 0.92)';
+        statusBadge = `<span style="background: #10b981; color: #021a10; font-size: 8px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">✓ PASSED</span>`;
+      } else if (isCurrentLeg) {
+        borderStyle = '2px solid #00f0ff';
+        bgStyle = 'rgba(8, 28, 45, 0.96)';
+        statusBadge = `<span style="background: #00f0ff; color: #020611; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 1s infinite;">▶ NEXT TARGET (${distToWp}m)</span>`;
+        pulseRing = `
+          <div style="
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 72px;
+            height: 72px;
+            margin-top: -36px;
+            margin-left: -36px;
+            border-radius: 50%;
+            border: 2px solid #00f0ff;
+            background: rgba(0, 240, 255, 0.15);
+            box-shadow: 0 0 16px #00f0ff;
+            animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+            pointer-events: none;
+            z-index: 0;
+          "></div>
+        `;
+      } else if (isDestination) {
+        borderStyle = '2px solid #f43f5e';
+        bgStyle = 'rgba(38, 10, 22, 0.94)';
+        statusBadge = `<span style="background: #f43f5e; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">DESTINATION</span>`;
+      } else {
+        borderStyle = '1.5px solid #24344d';
+        bgStyle = 'rgba(12, 17, 28, 0.92)';
+        statusBadge = `<span style="background: #1e293b; color: #94a3b8; font-size: 8px; font-weight: 700; padding: 1px 3px; border-radius: 2px;">UPCOMING</span>`;
       }
 
       el.innerHTML = `
-        <div style="
-          display: flex;
-          align-items: center;
-          gap: 3px;
-          background: ${bg};
-          border: 1.5px solid ${border};
-          padding: 2px 5px;
-          border-radius: 4px;
-          font-family: ui-monospace, monospace;
-          font-size: 10px;
-          font-weight: 700;
-          color: ${textColor};
-          box-shadow: 0 0 ${isSelected ? '12px #00f0ff' : '5px rgba(0,0,0,0.8)'};
-          transition: all 0.2s ease;
-          transform: translate(-50%, -50%);
-        " title="${wp.name}">
-          <span>WP${idx + 1}</span>
-          ${idx < selectedDrone.route.length - 1 ? '<span style="font-size: 8px; color: #38bdf8;">▶</span>' : ''}
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
+          ${pulseRing}
+          <div style="
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            background: ${bgStyle};
+            border: ${borderStyle};
+            padding: 3px 7px;
+            border-radius: 5px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px #00f0ff' : isCurrentLeg ? '0 0 14px rgba(0,240,255,0.5)' : 'none'};
+            min-width: 110px;
+            max-width: 190px;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
+          ">
+            <!-- Header: WP Number & Status -->
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 2px;">
+              <span style="
+                color: ${isReached ? '#34d399' : isCurrentLeg ? '#00f0ff' : '#38bdf8'};
+                font-family: ui-monospace, SFMono-Regular, monospace;
+                font-size: 10px;
+                font-weight: 900;
+              ">
+                WP-${wpNumber}
+              </span>
+              ${statusBadge}
+            </div>
+
+            <!-- Body: Waypoint Label / Name -->
+            <div style="
+              color: #ffffff;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              font-size: 10px;
+              font-weight: 700;
+              margin-top: 2px;
+              line-height: 1.25;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            " title="${wp.name}">
+              ${wp.name}
+            </div>
+
+            <!-- Footer: Altitude clearance & type -->
+            <div style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-top: 2px;
+              padding-top: 2px;
+              font-family: ui-monospace, monospace;
+              font-size: 9px;
+              color: #94a3b8;
+            ">
+              <span style="color: #38bdf8; font-weight: 700;">Alt: ${wp.altitudeMeters}m AGL</span>
+              <span style="text-transform: uppercase; font-size: 8px;">${wp.type}</span>
+            </div>
+          </div>
         </div>
       `;
 
@@ -1246,44 +1383,61 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (!destCoords) return;
 
       let marker = destinationMarkersRef.current[drone.id];
-      const color = DRONE_THEME_COLORS[drone.id] || '#00f0ff';
+      const isSelected = drone.id === selectedDroneId;
+      const color = isSelected ? '#00f0ff' : (DRONE_THEME_COLORS[drone.id] || '#00f0ff');
       const destName = drone.missionDestinationName || 'Mission Pad';
       const dist = drone.distanceRemainingKm !== undefined ? `${drone.distanceRemainingKm} km` : '';
       const eta = drone.etaSecondsRemaining !== undefined ? `${Math.ceil(drone.etaSecondsRemaining / 60)}m` : '';
 
       const markerHtml = `
-        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; transform: translate(-50%, -100%);">
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; transform: translate(-50%, -100%); position: relative;">
+          ${isSelected ? `
+            <div style="
+              position: absolute;
+              bottom: 0;
+              width: 50px;
+              height: 50px;
+              border-radius: 50%;
+              border: 2px solid #00f0ff;
+              background: rgba(0, 240, 255, 0.2);
+              animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+              pointer-events: none;
+            "></div>
+          ` : ''}
           <div style="
-            background: rgba(10, 16, 28, 0.95);
-            border: 1.5px solid ${color};
+            background: rgba(10, 16, 28, 0.96);
+            border: ${isSelected ? '2px solid #00f0ff' : `1.5px solid ${color}`};
             border-radius: 4px;
-            padding: 2.5px 8px;
+            padding: 3px 9px;
             color: #ffffff;
             font-family: ui-monospace, monospace;
             font-size: 10px;
             font-weight: 800;
             white-space: nowrap;
-            box-shadow: 0 0 14px ${color}80, 0 4px 12px rgba(0,0,0,0.8);
+            box-shadow: ${isSelected ? '0 0 20px #00f0ff, 0 4px 14px rgba(0,0,0,0.9)' : `0 0 14px ${color}80, 0 4px 12px rgba(0,0,0,0.8)`};
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
+            z-index: 2;
           ">
-            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${color}; box-shadow: 0 0 6px ${color};"></span>
-            <span style="color: ${color};">${drone.callsign} DESTINATION</span>
+            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: ${color}; box-shadow: 0 0 8px ${color};"></span>
+            <span style="color: ${color}; font-weight: 900;">${drone.callsign} DESTINATION</span>
+            ${isSelected ? `<span style="background: #00f0ff; color: #020611; font-size: 8px; font-weight: 900; padding: 1px 4px; border-radius: 2px;">ACTIVE TARGET</span>` : ''}
           </div>
 
           <div style="
             margin-top: 2px;
-            background: rgba(15, 23, 42, 0.92);
-            border: 1px solid #334155;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid ${isSelected ? '#00f0ff88' : '#334155'};
             border-radius: 3px;
-            padding: 2px 6px;
+            padding: 2px 7px;
             color: #e2e8f0;
             font-family: ui-monospace, monospace;
             font-size: 9px;
             font-weight: 600;
             white-space: nowrap;
             box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+            z-index: 2;
           ">
             ${destName} ${dist ? `• <span style="color: #38bdf8; font-weight: 700;">${dist}</span>` : ''} ${eta ? `(${eta})` : ''}
           </div>
@@ -1295,9 +1449,10 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             background: ${color};
             clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
             box-shadow: 0 0 10px ${color};
+            z-index: 2;
           "></div>
-          <div style="width: 2px; height: 6px; background: ${color};"></div>
-          <div style="width: 6px; height: 6px; border-radius: 50%; background: ${color}; box-shadow: 0 0 6px ${color};"></div>
+          <div style="width: 2px; height: 6px; background: ${color}; z-index: 2;"></div>
+          <div style="width: 6px; height: 6px; border-radius: 50%; background: ${color}; box-shadow: 0 0 6px ${color}; z-index: 2;"></div>
         </div>
       `;
 
@@ -1323,7 +1478,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         marker.setLngLat([destCoords[0], destCoords[1]]);
       }
     });
-  }, [drones, layerDestinations, isMapLoaded, onSelectDrone]);
+  }, [drones, selectedDroneId, layerDestinations, isMapLoaded, onSelectDrone]);
 
   // === RENDER CHECKPOINT MISSION CORRIDOR & CHECKPOINT MARKERS ===
   useEffect(() => {
@@ -1674,6 +1829,15 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             title="Recenter Coimbatore Airspace Corridor"
           >
             <LocateFixed className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Focus Selected Drone */}
+          <button
+            onClick={handleFocusSelectedDrone}
+            className="w-6 h-6 flex items-center justify-center rounded text-cyan-400 hover:text-white hover:bg-cyan-500/30 transition-colors"
+            title="Focus & Center Camera on Selected Drone"
+          >
+            <Crosshair className="w-3.5 h-3.5" />
           </button>
 
           {/* Follow Drone Toggle */}
@@ -2119,6 +2283,17 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           title="Reset Simulation State"
         >
           <RotateCcw className="w-3.5 h-3.5" />
+        </button>
+
+        <div className="h-4 w-[1px] bg-[#1f2a40]"></div>
+
+        <button
+          onClick={handleFocusSelectedDrone}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-mono text-cyan-300 hover:text-white hover:bg-cyan-500/20 transition-colors"
+          title="Smoothly fly camera to selected aircraft"
+        >
+          <Crosshair className="w-3 h-3 text-cyan-400" />
+          <span>FOCUS</span>
         </button>
 
         <div className="h-4 w-[1px] bg-[#1f2a40]"></div>

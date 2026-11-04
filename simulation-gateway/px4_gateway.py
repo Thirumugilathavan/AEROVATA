@@ -28,10 +28,12 @@ from typing import Any, Dict, List, Optional, Set, Union
 try:
     from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body, Query, status
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse, Response
     import uvicorn
     from pymavlink import mavutil
     from pymavlink.dialects.v20 import common as mavlink2
+    from PIL import Image, ImageDraw
+    import io
 except ImportError as e:
     sys.stderr.write(f"Missing dependency: {e}\nRun: pip install pymavlink fastapi uvicorn websockets\n")
     sys.exit(1)
@@ -370,6 +372,21 @@ class GatewayManager:
 
     def get_primary_vehicle(self) -> VehicleState:
         return self.get_vehicle(self.primary_sysid)
+
+    def get_vehicle_by_identifier(self, identifier: str) -> VehicleState:
+        with self.lock:
+            clean = identifier.upper().replace("DRONE ", "").replace("DRONE", "").strip()
+            for v in self.vehicles.values():
+                if v.callsign.upper() == clean or v.callsign.upper() == identifier.upper():
+                    return v
+                if f"AV-0{v.system_id}" == clean or f"AV-{v.system_id}" == clean:
+                    return v
+            try:
+                sysid = int(clean)
+                return self.get_vehicle(sysid)
+            except ValueError:
+                pass
+            return self.get_primary_vehicle()
 
     def update_connection_state(self) -> None:
         with self.lock:
@@ -801,6 +818,7 @@ def run_test_harness(port: int = 14550) -> None:
 
 # ─── REST ENDPOINTS (PRIORITY 4 & 1) ─────────────────────────────────────────
 
+@app.get("/health")
 @app.get("/api/v1/health")
 async def get_health() -> Dict[str, Any]:
     gateway_mgr.update_connection_state()
@@ -867,16 +885,137 @@ async def get_vehicle_telemetry(vehicle_id: str) -> Dict[str, Any]:
 @app.get("/api/v1/drones/{drone_id}/camera")
 async def get_drone_camera_metadata(drone_id: str) -> Dict[str, Any]:
     pv = gateway_mgr.get_primary_vehicle()
+    veh = gateway_mgr.get_vehicle_by_identifier(drone_id)
     return {
-        "droneId": drone_id,
-        "status": "fallback" if not pv.connected else "active",
-        "streamUrl": f"http://localhost:8000/api/v1/drones/{drone_id}/stream",
+        "droneId": veh.callsign,
+        "status": "fallback" if not (veh.connected or gateway_mgr.harness_active) else "active",
+        "streamUrl": f"http://localhost:8000/api/v1/drones/{veh.callsign}/stream",
+        "snapshotUrl": f"http://localhost:8000/api/v1/drones/{veh.callsign}/snapshot",
         "resolution": "1920x1080",
         "frameRateFps": 30,
         "syntheticOverlay": True,
         "opticalGimbalLocked": True,
         "cameraType": "EO_IR_GIMBAL_4K",
+        "telemetry": veh.to_dict(),
     }
+
+DRONE_CORRIDORS = {
+    "AV-01": {"origin": "Peelamedu Depot", "dest": "CMCH Trauma Center", "next_wp": "WP-02 Nava India Skyway", "dist_m": 320, "alt_target": 65},
+    "AV-02": {"origin": "Gandhipuram Hub", "dest": "TIDEL Park IT SEZ", "next_wp": "WP-02 Avarampalayam High Viaduct", "dist_m": 580, "alt_target": 60},
+    "AV-03": {"origin": "Ramanathapuram", "dest": "PSG Tech Innovation", "next_wp": "WP-02 Trichy Road Flyover", "dist_m": 410, "alt_target": 56},
+    "AV-04": {"origin": "Singanallur Perimeter", "dest": "KMCH Helipad Pad 2", "next_wp": "WP-02 Ondipudur Gate Transit", "dist_m": 670, "alt_target": 70},
+}
+
+def generate_drone_fpv_frame(drone_id: str, width: int = 640, height: int = 360) -> bytes:
+    veh = gateway_mgr.get_vehicle_by_identifier(drone_id)
+    meta = DRONE_CORRIDORS.get(veh.callsign, DRONE_CORRIDORS.get("AV-01"))
+    t = time.time()
+    speed_kmh = max(15.0, veh.groundspeed_kmh if (veh.connected or gateway_mgr.harness_active) else 48.5)
+    alt_m = max(10.0, veh.relative_altitude_m if (veh.connected or gateway_mgr.harness_active) else meta["alt_target"])
+    heading_deg = veh.heading_degrees if (veh.connected or gateway_mgr.harness_active) else 246.0
+    pitch_deg = veh.pitch_deg
+    
+    img = Image.new("RGB", (width, height), color=(10, 16, 28))
+    draw = ImageDraw.Draw(img)
+    
+    pitch_offset = int(pitch_deg * 2.5)
+    horizon_y = max(int(height * 0.2), min(int(height * 0.7), int(height * 0.45) + pitch_offset))
+    
+    draw.rectangle([(0, 0), (width, horizon_y)], fill=(6, 14, 28))
+    draw.rectangle([(0, max(0, horizon_y - 40)), (width, horizon_y)], fill=(12, 24, 46))
+    draw.rectangle([(0, horizon_y), (width, height)], fill=(15, 20, 30))
+    
+    cx = width // 2 + int(math.sin(math.radians(heading_deg % 60)) * 35)
+    draw.polygon([(cx - 25, horizon_y), (cx + 25, horizon_y), (cx + 240, height), (cx - 240, height)], fill=(22, 28, 40), outline=(0, 240, 255))
+    
+    cycle_offset = int((t * speed_kmh * 2.2) % 60)
+    for step in range(5):
+        y_pos = horizon_y + 15 + step * 40 + cycle_offset
+        if y_pos < height:
+            d_w = 4 + step * 3
+            draw.rectangle([(cx - d_w, y_pos), (cx + d_w, min(height, y_pos + 16))], fill=(255, 255, 255))
+            
+    for px_idx, px in enumerate([cx - 150, cx - 100, cx - 50]):
+        pier_h = 28 + px_idx * 14
+        pier_top = horizon_y - pier_h + 10
+        draw.rectangle([(px, pier_top), (px + 10, horizon_y + 12)], fill=(30, 42, 60), outline=(45, 60, 85))
+    draw.polygon([(cx - 170, horizon_y - 22), (cx - 30, horizon_y - 8), (cx - 30, horizon_y - 2), (cx - 170, horizon_y - 15)], fill=(40, 56, 78))
+    
+    tower_x = cx + 75
+    tower_h = 70
+    draw.rectangle([(tower_x, horizon_y - tower_h), (tower_x + 50, horizon_y + 8)], fill=(20, 32, 50), outline=(0, 240, 255))
+    for wy in range(horizon_y - tower_h + 8, horizon_y, 14):
+        for wx in range(tower_x + 6, tower_x + 46, 10):
+            draw.rectangle([(wx, wy), (wx + 4, wy + 6)], fill=(0, 240, 255))
+            
+    reticle_x = cx
+    reticle_y = horizon_y + 12
+    ret_size = 24
+    draw.rectangle([(reticle_x - ret_size, reticle_y - ret_size), (reticle_x + ret_size, reticle_y + ret_size)], outline=(0, 240, 255), width=2)
+    draw.line([(reticle_x - ret_size - 6, reticle_y), (reticle_x + ret_size + 6, reticle_y)], fill=(0, 240, 255), width=1)
+    draw.line([(reticle_x, reticle_y - ret_size - 6), (reticle_x, reticle_y + ret_size + 6)], fill=(0, 240, 255), width=1)
+    draw.text((reticle_x - 55, reticle_y + ret_size + 4), f"LOCKED: {meta['next_wp'][:16]} ({meta['dist_m']}m)", fill=(0, 240, 255))
+    
+    for p_val, p_col in [(10, (0, 240, 255)), (0, (0, 240, 255)), (-10, (245, 158, 11))]:
+        bar_y = horizon_y - int(p_val * 3.5)
+        if 35 < bar_y < height - 35:
+            draw.line([(cx - 65, bar_y), (cx - 20, bar_y)], fill=p_col, width=2)
+            draw.line([(cx + 20, bar_y), (cx + 65, bar_y)], fill=p_col, width=2)
+            draw.text((cx + 70, bar_y - 6), f"{p_val:02d}", fill=p_col)
+            draw.text((cx - 88, bar_y - 6), f"{p_val:02d}", fill=p_col)
+            
+    ch_x, ch_y = width // 2, height // 2
+    draw.line([(ch_x - 12, ch_y), (ch_x - 4, ch_y)], fill=(255, 255, 255), width=2)
+    draw.line([(ch_x + 4, ch_y), (ch_x + 12, ch_y)], fill=(255, 255, 255), width=2)
+    draw.line([(ch_x, ch_y - 12), (ch_x, ch_y - 4)], fill=(255, 255, 255), width=2)
+    draw.line([(ch_x, ch_y + 4), (ch_x, ch_y + 12)], fill=(255, 255, 255), width=2)
+    
+    draw.rectangle([(0, 0), (width, 26)], fill=(6, 10, 18))
+    draw.line([(0, 26), (width, 26)], fill=(0, 240, 255), width=1)
+    cam_num = "01" if "01" in veh.callsign else "02" if "02" in veh.callsign else "03" if "03" in veh.callsign else "04"
+    status_tag = "LIVE PX4/MAVLINK" if veh.connected else "LIVE SIMULATION FPV"
+    status_col = (16, 185, 129) if veh.connected else (0, 240, 255)
+    draw.text((10, 6), f"● {status_tag} • CAM-{cam_num} [{veh.callsign}] • 1080p60", fill=status_col)
+    
+    time_str = time.strftime("%H:%M:%S IST")
+    draw.text((width - 235, 6), f"GPS: {veh.gps_fix_type} ({veh.satellites_visible} SAT) • {time_str}", fill=(16, 185, 129))
+    
+    draw.rectangle([(6, height // 2 - 35), (76, height // 2 + 35)], fill=(8, 14, 24), outline=(0, 240, 255))
+    draw.text((12, height // 2 - 28), "SPD KM/H", fill=(148, 163, 184))
+    draw.text((12, height // 2 - 10), f"{speed_kmh:.1f}", fill=(255, 255, 255))
+    draw.text((12, height // 2 + 10), "AIRSPEED", fill=(0, 240, 255))
+    
+    draw.rectangle([(width - 76, height // 2 - 35), (width - 6, height // 2 + 35)], fill=(8, 14, 24), outline=(0, 240, 255))
+    draw.text((width - 70, height // 2 - 28), "ALT AGL", fill=(148, 163, 184))
+    draw.text((width - 70, height // 2 - 10), f"{alt_m:.1f}m", fill=(255, 255, 255))
+    draw.text((width - 70, height // 2 + 10), f"HDG {int(heading_deg)}°", fill=(0, 240, 255))
+    
+    draw.rectangle([(0, height - 24), (width, height)], fill=(6, 10, 18))
+    draw.line([(0, height - 24), (width, height - 24)], fill=(30, 45, 68), width=1)
+    pos_str = f"LAT: {veh.latitude:.5f}°  LON: {veh.longitude:.5f}°  CORRIDOR: {meta['origin']} -> {meta['dest']}"
+    draw.text((10, height - 17), pos_str, fill=(148, 163, 184))
+    draw.text((width - 145, height - 17), f"BAT: {veh.battery_percentage:.0f}% ({veh.battery_voltage_v:.1f}V)", fill=(16, 185, 129))
+    
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    return buf.getvalue()
+
+@app.get("/api/v1/drones/{drone_id}/stream")
+@app.get("/api/v1/camera/{drone_id}/stream")
+async def get_drone_camera_stream(drone_id: str):
+    async def frame_stream():
+        while True:
+            frame_bytes = generate_drone_fpv_frame(drone_id)
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+            await asyncio.sleep(0.05)
+            
+    return StreamingResponse(frame_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/v1/drones/{drone_id}/snapshot")
+async def get_drone_camera_snapshot(drone_id: str):
+    frame_bytes = generate_drone_fpv_frame(drone_id)
+    return Response(content=frame_bytes, media_type="image/jpeg")
 
 # ─── MISSIONS API ────────────────────────────────────────────────────────────
 

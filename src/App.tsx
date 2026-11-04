@@ -663,6 +663,11 @@ export function App() {
         {/* TAB 6: DEDICATED LIVE CAMERA SCREEN ROUTE (/live-camera) */}
         {activeTab === 'camera' && (
           <LiveCameraScreen
+            drones={drones}
+            selectedDroneId={selectedDroneId}
+            onSelectDrone={handleSelectDrone}
+            onPauseResume={handlePauseResume}
+            onTriggerRTB={handleTriggerRTB}
             onBackToMap={() => {
               setActiveTab('live');
               window.history.pushState({}, '', '/');
