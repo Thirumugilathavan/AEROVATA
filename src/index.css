@@ -118,3 +118,43 @@ body {
 .maplibregl-popup-tip {
   border-top-color: #111622 !important;
 }
+
+/* 3D Drone Model Animations & Lighting */
+@keyframes aerovataRotorSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes aerovataRotorSpinReverse {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+
+@keyframes aerovataStrobeFlash {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 1; filter: drop-shadow(0 0 6px #ffffff); }
+}
+
+@keyframes aerovataBeaconPulse {
+  0% { transform: scale(0.95); opacity: 0.85; }
+  50% { transform: scale(1.18); opacity: 0.35; }
+  100% { transform: scale(0.95); opacity: 0.85; }
+}
+
+.aerovata-rotor-spin {
+  animation: aerovataRotorSpin 0.08s linear infinite;
+  transform-origin: center;
+}
+
+.aerovata-rotor-spin-rev {
+  animation: aerovataRotorSpinReverse 0.08s linear infinite;
+  transform-origin: center;
+}
+
+.aerovata-strobe {
+  animation: aerovataStrobeFlash 1s ease-in-out infinite;
+}
+
+.aerovata-beacon-ring {
+  animation: aerovataBeaconPulse 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}

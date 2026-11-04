@@ -21,9 +21,10 @@ import { CheckpointMissionPanel } from './components/CheckpointMissionPanel';
 import { ApiContractModal } from './components/ApiContractModal';
 import { Px4SitlStatusBanner } from './components/Px4SitlStatusBanner';
 import { Px4SetupModal } from './components/Px4SetupModal';
+import { BottomMissionBar } from './components/BottomMissionBar';
 import { apiService } from './services/api/index';
 import type { Mission, MissionTelemetry } from './types/mission';
-import { Navigation } from 'lucide-react';
+import { Navigation, X } from 'lucide-react';
 import { 
   INITIAL_DRONES, 
   INITIAL_GEOFENCES, 
@@ -71,6 +72,14 @@ export function App() {
   const [bottomTabMode, setBottomTabMode] = useState<'detail' | 'checkpoint' | 'logs'>('detail');
   const [isApiContractOpen, setIsApiContractOpen] = useState<boolean>(false);
   const [isPx4SetupOpen, setIsPx4SetupOpen] = useState<boolean>(false);
+
+  // Map-First 3D Command Center Layout & Drawer States
+  const [isLeftFleetOpen, setIsLeftFleetOpen] = useState<boolean>(false);
+  const [isRightDrawerOpen, setIsRightDrawerOpen] = useState<boolean>(false);
+  const [rightDrawerTab, setRightDrawerTab] = useState<'alerts' | 'airspace' | 'radar' | 'missions' | 'system'>('alerts');
+  const [bottomDrawerTab, setBottomDrawerTab] = useState<'none' | 'route' | 'checkpoints' | 'logs'>('none');
+  const [isBottomBarHidden, setIsBottomBarHidden] = useState<boolean>(false);
+  const [autoFollow, setAutoFollow] = useState<boolean>(false);
 
   // Core Simulation & Fleet state (Coimbatore, Tamil Nadu)
   const [drones, setDrones] = useState<Drone[]>(INITIAL_DRONES);
@@ -124,6 +133,16 @@ export function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Automatic MapLibre GL canvas resize trigger when drawers expand/collapse
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if ((window as any).__map) {
+        (window as any).__map.resize();
+      }
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [isLeftFleetOpen, isRightDrawerOpen, bottomDrawerTab, isBottomBarHidden]);
 
   // Subscribe to standalone checkpoint mission controller & PX4 SITL adapter
   useEffect(() => {
@@ -474,27 +493,27 @@ export function App() {
 
       {/* Main Command Center Workspace */}
       <main className="flex-1 flex overflow-hidden relative">
-        {/* TAB 1: LIVE OPERATIONS (3-Column Desktop Grid Layout) */}
+        {/* TAB 1: LIVE OPERATIONS (Map-First 3D Drone Command Center Layout) */}
         {activeTab === 'live' && (
-          <div className="flex-1 grid grid-cols-[310px_1fr_340px] xl:grid-cols-[340px_1fr_380px] 2xl:grid-cols-[370px_1fr_420px] w-full h-full overflow-hidden min-h-0 min-w-0">
-            {/* Column 1: Left Sidebar (Aircraft & Fleet Directory) */}
-            <div className="h-full overflow-hidden min-w-0 flex flex-col">
-              <FleetSidebar
-                drones={drones}
-                selectedDroneId={selectedDroneId}
-                onSelectDrone={handleSelectDrone}
-                filter={filter}
-                setFilter={setFilter}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                activeAlertsCount={alerts.filter((a) => !a.acknowledged).length}
-                obstacleConflicts={obstacleConflicts}
-              />
-            </div>
+          <div className="flex-1 flex w-full h-full overflow-hidden relative min-h-0 min-w-0 bg-[#070a12]">
+            {/* Column 1: Left Compact Sidebar & Slide-out Aircraft Drawer */}
+            <FleetSidebar
+              drones={drones}
+              selectedDroneId={selectedDroneId}
+              onSelectDrone={handleSelectDrone}
+              filter={filter}
+              setFilter={setFilter}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              activeAlertsCount={alerts.filter((a) => !a.acknowledged).length}
+              obstacleConflicts={obstacleConflicts}
+              isExpanded={isLeftFleetOpen}
+              onToggleExpand={setIsLeftFleetOpen}
+            />
 
-            {/* Column 2: Central Geospatial Workspace & Telemetry HUD */}
-            <div className="h-full overflow-hidden min-w-0 flex flex-col border-r border-[#1f2a40]">
-              {/* Primary Viewport: 2D/3D Geospatial Map or Synthetic POV Camera */}
+            {/* Column 2: Central Geospatial Workspace (Dominant Map Viewport: 85-88% of screen) */}
+            <div className="flex-1 h-full flex flex-col relative overflow-hidden min-w-0 border-r border-[#1f2a40]">
+              {/* Primary Map Viewport */}
               <div className="flex-1 relative w-full h-full min-h-0 overflow-hidden">
                 {viewMode === 'pov' && selectedDrone ? (
                   <DronePOVCamera
@@ -525,100 +544,108 @@ export function App() {
                     checkpointTelemetry={checkpointTelemetry}
                   />
                 )}
+
+                {/* Floating Expandable Drawer (Route HUD, Checkpoints, Logs) */}
+                {bottomDrawerTab !== 'none' && (
+                  <div className="absolute bottom-[46px] left-3 right-3 max-h-[380px] bg-[#0c101a]/95 backdrop-blur-md border border-[#1f2a40] rounded-t-lg z-20 shadow-2xl flex flex-col animate-in slide-in-from-bottom duration-200 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-[#1f2a40] bg-[#101522] flex items-center justify-between text-xs font-mono">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                        <span className="font-bold text-cyan-300 uppercase">
+                          {bottomDrawerTab === 'route' && 'Aircraft Vitals & Route Intelligence HUD'}
+                          {bottomDrawerTab === 'checkpoints' && 'Autonomous Checkpoint Mission Controller'}
+                          {bottomDrawerTab === 'logs' && 'Live UTM Flight Logs & Battery Cells'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setBottomDrawerTab('none')}
+                        className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-2 min-h-0">
+                      {bottomDrawerTab === 'route' && selectedDrone && (
+                        <DroneDetailPanel
+                          drone={selectedDrone}
+                          onClose={() => setBottomDrawerTab('none')}
+                          onPauseResume={handlePauseResume}
+                          onTriggerReplan={handleTriggerReplan}
+                          onTriggerRTB={handleTriggerRTB}
+                          onMarkComplete={handleMarkComplete}
+                          onSwitchToPOV={() => setViewMode('pov')}
+                          onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
+                          selectedWaypointId={selectedWaypointId}
+                          activeConflict={selectedDroneConflict}
+                        />
+                      )}
+
+                      {bottomDrawerTab === 'checkpoints' && (
+                        <CheckpointMissionPanel
+                          onOpenApiContract={() => setIsApiContractOpen(true)}
+                          onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
+                        />
+                      )}
+
+                      {bottomDrawerTab === 'logs' && (
+                        <BottomOverviewPanel
+                          drones={drones}
+                          flightLogs={flightLogs}
+                          onSelectDrone={handleSelectDrone}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Bottom Multi-Panel Container */}
-              <div className="flex flex-col shrink-0 border-t border-[#1f2a40] bg-[#0c101a]">
-                {/* Panel Selector Strip */}
-                <div className="flex items-center justify-between px-3 py-1 bg-[#090d17] border-b border-[#1b2538] text-xs">
-                  <div className="flex items-center gap-1 font-mono">
-                    <button
-                      onClick={() => setBottomTabMode('detail')}
-                      className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
-                        bottomTabMode === 'detail'
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                      }`}
-                    >
-                      <Navigation className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Aircraft Vitals &amp; Route HUD</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTabMode('checkpoint')}
-                      className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
-                        bottomTabMode === 'checkpoint'
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      <span>Checkpoint Showcase</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTabMode('logs')}
-                      className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                        bottomTabMode === 'logs'
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                      }`}
-                    >
-                      <span>Flight Logs</span>
-                    </button>
-                  </div>
-
-                  <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono text-slate-400">
-                    <span>Active Telemetry: {checkpointTelemetry?.groundSpeedKmh || 0} km/h</span>
-                    <span>•</span>
-                    <span>Alt: {Math.round(checkpointTelemetry?.altitudeMeters || 0)}m</span>
-                  </div>
-                </div>
-
-                {/* Selected Panel Content */}
-                {bottomTabMode === 'detail' && selectedDrone && (
-                  <DroneDetailPanel
-                    drone={selectedDrone}
-                    onClose={() => setBottomTabMode('logs')}
-                    onPauseResume={handlePauseResume}
-                    onTriggerReplan={handleTriggerReplan}
-                    onTriggerRTB={handleTriggerRTB}
-                    onMarkComplete={handleMarkComplete}
-                    onSwitchToPOV={() => setViewMode('pov')}
-                    onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
-                    selectedWaypointId={selectedWaypointId}
-                    activeConflict={selectedDroneConflict}
-                  />
-                )}
-
-                {bottomTabMode === 'checkpoint' && (
-                  <CheckpointMissionPanel
-                    onOpenApiContract={() => setIsApiContractOpen(true)}
-                    onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
-                  />
-                )}
-
-                {bottomTabMode === 'logs' && (
-                  <BottomOverviewPanel
-                    drones={drones}
-                    flightLogs={flightLogs}
-                    onSelectDrone={handleSelectDrone}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Column 3: Right Sidebar (Operational Alerts & Separation Monitoring) */}
-            <div className="h-full overflow-hidden min-w-0 flex flex-col">
-              <RightSidebar
-                alerts={alerts}
-                conflicts={conflicts}
-                obstacleConflicts={obstacleConflicts}
-                onAcknowledgeAll={handleAcknowledgeAllAlerts}
-                onAcknowledgeAlert={handleAcknowledgeAlert}
+              {/* Compact Bottom Mission Bar (~46px) */}
+              <BottomMissionBar
+                selectedDrone={selectedDrone}
+                drones={drones}
+                isSimRunning={isSimRunning}
+                onToggleSim={() => setIsSimRunning(!isSimRunning)}
+                simSpeed={simulationSpeed}
+                onChangeSimSpeed={setSimulationSpeed}
+                onResetSim={handleResetSimulation}
+                onFocusDrone={() => {
+                  if (selectedDrone && (window as any).__map) {
+                    (window as any).__map.flyTo({
+                      center: [selectedDrone.vitals.longitude, selectedDrone.vitals.latitude],
+                      zoom: 15.4,
+                      pitch: viewMode === '3d' ? 62 : 0,
+                      bearing: viewMode === '3d' ? -25 : 0,
+                      duration: 900,
+                      essential: true,
+                    });
+                  }
+                }}
+                autoFollow={autoFollow}
+                onToggleAutoFollow={() => setAutoFollow(!autoFollow)}
                 onSelectDrone={handleSelectDrone}
+                activeDrawer={bottomDrawerTab}
+                onSetActiveDrawer={(tab) => setBottomDrawerTab(tab)}
+                isFullyCollapsed={isBottomBarHidden}
+                onToggleFullyCollapse={() => setIsBottomBarHidden(!isBottomBarHidden)}
+                checkpointTelemetry={checkpointTelemetry}
               />
             </div>
+
+            {/* Column 3: Right Compact Sidebar & Slide-out Tool Drawer */}
+            <RightSidebar
+              alerts={alerts}
+              conflicts={conflicts}
+              obstacleConflicts={obstacleConflicts}
+              onAcknowledgeAll={handleAcknowledgeAllAlerts}
+              onAcknowledgeAlert={handleAcknowledgeAlert}
+              onSelectDrone={handleSelectDrone}
+              officialAirspaceZones={officialAirspaceZones}
+              isExpanded={isRightDrawerOpen}
+              onToggleExpand={setIsRightDrawerOpen}
+              activeTab={rightDrawerTab}
+              onChangeTab={setRightDrawerTab}
+            />
           </div>
         )}
 

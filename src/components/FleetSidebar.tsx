@@ -6,10 +6,14 @@ import {
   AlertTriangle, 
   Radio, 
   Compass,
-  ShieldAlert,
-  ShieldCheck,
-  Zap,
-  Navigation
+  ShieldAlert, 
+  ShieldCheck, 
+  Zap, 
+  Navigation,
+  X,
+  SlidersHorizontal,
+  ChevronRight,
+  Crosshair
 } from 'lucide-react';
 import { Drone, DroneStatus, ObstacleConflict } from '../types/fleet';
 
@@ -23,6 +27,8 @@ interface FleetSidebarProps {
   setSearchQuery: (query: string) => void;
   activeAlertsCount: number;
   obstacleConflicts?: ObstacleConflict[];
+  isExpanded?: boolean;
+  onToggleExpand?: (expanded: boolean) => void;
 }
 
 export const FleetSidebar: React.FC<FleetSidebarProps> = ({
@@ -35,6 +41,8 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
   setSearchQuery,
   activeAlertsCount,
   obstacleConflicts = [],
+  isExpanded = false,
+  onToggleExpand,
 }) => {
   // Counters
   const totalCount = drones.length;
@@ -66,6 +74,14 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
     return 'text-rose-400 bg-rose-500';
   };
 
+  const getStatusDot = (drone: Drone, hasConflict?: boolean) => {
+    if (hasConflict || drone.airspaceStatus === 'PROHIBITED') return 'bg-rose-500 shadow-[0_0_8px_#ef4444] animate-pulse';
+    if (drone.isRerouting || drone.airspaceStatus === 'PERMISSION_REQUIRED') return 'bg-amber-400 shadow-[0_0_8px_#f59e0b]';
+    if (['delivering', 'en_route_pickup', 'active'].includes(drone.status)) return 'bg-emerald-400 shadow-[0_0_8px_#10b981]';
+    if (drone.status === 'charging') return 'bg-cyan-400 shadow-[0_0_8px_#06b6d4]';
+    return 'bg-slate-500';
+  };
+
   const getStatusBadge = (status: DroneStatus, inConflict?: boolean) => {
     if (inConflict) {
       return { text: 'Obstacle Warning', color: 'bg-rose-950/80 text-rose-300 border-rose-800' };
@@ -87,221 +103,288 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
   };
 
   return (
-    <aside className="w-full h-full bg-[#0c101a] border-r border-[#1f2a40] flex flex-col select-none overflow-hidden min-w-0">
-      {/* Top Header */}
-      <div className="p-3.5 border-b border-[#1f2a40] bg-[#101522] shrink-0">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
-            <h2 className="text-sm font-bold font-mono tracking-wider text-slate-100 uppercase">
-              ACTIVE AIRCRAFT ({activeCount})
-            </h2>
-          </div>
-          <span className="text-xs font-mono text-slate-400 font-semibold">FLEET: {totalCount} UNITS</span>
+    <div className="h-full flex relative select-none">
+      {/* ─── 1. COMPACT VERTICAL ICON TOOLBAR (WIDTH: ~56px) ─── */}
+      <aside className="w-14 h-full bg-[#090d16] border-r border-[#1a2438] flex flex-col items-center py-2.5 justify-between shrink-0 z-30">
+        {/* Top Radio Icon */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => onToggleExpand && onToggleExpand(!isExpanded)}
+            title={isExpanded ? 'Collapse Fleet Panel' : 'Expand Fleet Panel'}
+            className="p-2 rounded-lg bg-[#111726] border border-[#212f4c] text-cyan-400 hover:text-cyan-300 hover:border-cyan-500/50 transition-all"
+          >
+            <Radio className="w-4 h-4 animate-pulse" />
+          </button>
+          <span className="text-[9px] font-mono text-slate-500 font-bold uppercase mt-0.5">FLEET</span>
         </div>
 
-        {/* Fleet KPI mini counters */}
-        <div className="grid grid-cols-4 gap-2 mb-3">
-          <div className="bg-[#141b2b] p-2 rounded border border-[#212d46] text-center">
-            <div className="text-[10px] font-mono uppercase text-slate-400 leading-tight">Total</div>
-            <div className="text-sm font-bold text-white font-mono mt-0.5">{totalCount}</div>
-          </div>
-          <div className="bg-[#141b2b] p-2 rounded border border-cyan-900/40 text-center">
-            <div className="text-[10px] font-mono uppercase text-cyan-400 leading-tight">Active</div>
-            <div className="text-sm font-bold text-cyan-300 font-mono mt-0.5">{activeCount}</div>
-          </div>
-          <div className="bg-[#141b2b] p-2 rounded border border-amber-900/40 text-center">
-            <div className="text-[10px] font-mono uppercase text-amber-400 leading-tight">Charge</div>
-            <div className="text-sm font-bold text-amber-300 font-mono mt-0.5">{chargingCount}</div>
-          </div>
-          <div className={`p-2 rounded border text-center ${attentionCount > 0 ? 'bg-rose-950/40 border-rose-800/70' : 'bg-[#141b2b] border-[#212d46]'}`}>
-            <div className={`text-[10px] font-mono uppercase leading-tight ${attentionCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Alert</div>
-            <div className={`text-sm font-bold font-mono mt-0.5 ${attentionCount > 0 ? 'text-rose-400' : 'text-slate-300'}`}>{attentionCount}</div>
-          </div>
-        </div>
+        {/* Vertical Drone Selector Stack */}
+        <div className="flex flex-col items-center gap-2.5 my-auto w-full px-1.5">
+          {drones.map((drone, idx) => {
+            const isSelected = drone.id === selectedDroneId;
+            const hasConflict = obstacleConflicts.some((c) => c.droneId === drone.id);
+            const dotClass = getStatusDot(drone, hasConflict);
+            const callsignShort = drone.id.replace('AV-', '') || `0${idx + 1}`;
 
-        {/* Search input */}
-        <div className="relative mb-2.5">
-          <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search callsign, ID or destination..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#141b2b] border border-[#243352] rounded pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-          />
-        </div>
+            return (
+              <button
+                key={drone.id}
+                onClick={() => {
+                  onSelectDrone(drone.id);
+                  if (onToggleExpand && !isExpanded) {
+                    onToggleExpand(true);
+                  }
+                }}
+                title={`${drone.callsign} (${drone.model}) - Click to Inspect`}
+                className={`relative group w-11 h-12 rounded-lg flex flex-col items-center justify-center transition-all ${
+                  isSelected
+                    ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_14px_rgba(0,240,255,0.4)] text-cyan-300'
+                    : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
+                }`}
+              >
+                {/* Status Dot */}
+                <span className={`absolute top-1 right-1 w-2 h-2 rounded-full ${dotClass}`} />
 
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs font-mono scrollbar-none">
-          {[
-            { id: 'all', label: 'All' },
-            { id: 'active', label: 'Active' },
-            { id: 'delivering', label: 'Delivering' },
-            { id: 'charging', label: 'Charging' },
-            { id: 'attention', label: 'Alert' },
-          ].map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setFilter(item.id)}
-              className={`px-2.5 py-1 rounded font-medium whitespace-nowrap transition-colors ${
-                filter === item.id
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 font-bold'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#141a29]'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
+                {/* Drone Icon */}
+                <Plane className={`w-4 h-4 mb-0.5 ${isSelected ? 'text-cyan-300' : 'text-slate-400'}`} />
 
-      {/* Drone List Cards with Smooth Internal Scroll */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2.5 min-h-0">
-        {filteredDrones.map((drone) => {
-          const isSelected = drone.id === selectedDroneId;
-          const activeConflict = obstacleConflicts.find((c) => c.droneId === drone.id);
-          const statusBadge = getStatusBadge(drone.status, !!activeConflict);
-          const batColor = getBatteryColor(drone.vitals.batteryPercentage);
-
-          return (
-            <div
-              key={drone.id}
-              onClick={() => onSelectDrone(drone.id)}
-              className={`p-3 rounded-lg cursor-pointer transition-all border ${
-                isSelected
-                  ? 'bg-[#151f33] border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.25)] ring-1 ring-cyan-400/50'
-                  : 'bg-[#121724] border-[#1e2a42] hover:bg-[#161d2e] hover:border-slate-700'
-              }`}
-            >
-              {/* Header: Drone Callsign & Altitude */}
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2.5">
-                  <div className={`p-1.5 rounded shrink-0 ${isSelected ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800 text-slate-300'}`}>
-                    <Plane className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="text-sm font-bold font-mono tracking-wider text-white">
-                      {drone.callsign}
-                    </span>
-                    <span className="text-xs text-slate-400 ml-2 font-mono">({drone.id})</span>
-                  </div>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <span className="text-sm font-bold font-mono text-cyan-300">
-                    {Math.round(drone.vitals.altitudeMeters)}m AGL
-                  </span>
-                </div>
-              </div>
-
-              {/* Battery Bar & Percentage */}
-              <div className="flex items-center justify-between text-xs mb-2 font-mono">
-                <div className="flex items-center gap-2 text-slate-400 flex-1 mr-3">
-                  <span className="text-xs shrink-0">Battery</span>
-                  <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
-                    <div
-                      className={`h-full transition-all duration-500 ${batColor.split(' ')[1]}`}
-                      style={{ width: `${Math.min(100, drone.vitals.batteryPercentage)}%` }}
-                    />
-                  </div>
-                </div>
-                <span className={`text-xs font-bold shrink-0 ${batColor.split(' ')[0]}`}>
-                  {Math.round(drone.vitals.batteryPercentage)}%
-                </span>
-              </div>
-
-              {/* Lat/Lon Coordinates Readout */}
-              <div className="text-xs font-mono text-slate-300 mb-1.5 bg-[#0b0f19] px-2.5 py-1 rounded border border-[#1b253b] flex items-center justify-between">
-                <span>Lat: {drone.vitals.latitude.toFixed(5)}°</span>
-                <span>Lon: {drone.vitals.longitude.toFixed(5)}°</span>
-              </div>
-
-              {/* Mission Route & Destination Target */}
-              <div className="text-[11px] font-mono mb-2 px-2.5 py-1.5 rounded bg-[#0b101c] border border-cyan-900/40">
-                <div className="flex items-center justify-between text-slate-400 mb-0.5">
-                  <div className="flex items-center gap-1.5 truncate text-slate-200">
-                    <Navigation className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span className="font-bold text-cyan-200 truncate" title={drone.missionDestinationName || drone.delivery?.destinationAddress || 'Assigned Pad'}>
-                      {drone.missionDestinationName || drone.delivery?.destinationAddress || 'Destination Pad'}
-                    </span>
-                  </div>
-                  {drone.distanceRemainingKm !== undefined && (
-                    <span className="text-cyan-300 font-bold shrink-0 ml-1">
-                      {drone.distanceRemainingKm.toFixed(1)} km
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-400">
-                  <span className="truncate" title={drone.missionStartLocation || drone.missionOriginName}>
-                    From: {drone.missionStartLocation || drone.missionOriginName || 'Origin Depot'}
-                  </span>
-                  <span className="text-slate-300 font-mono">
-                    {drone.etaSecondsRemaining !== undefined
-                      ? `${Math.max(0, Math.ceil(drone.etaSecondsRemaining / 60))}m ETA`
-                      : `${drone.vitals.estimatedFlightTimeMinutes}m rem`}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-cyan-300 font-mono mt-1 pt-1 border-t border-[#1b253b]">
-                  <span className="truncate" title={drone.nextWaypointName || 'Approaching Corridor'}>
-                    Next WP: {drone.nextWaypointName || (drone.route[drone.currentWaypointIndex + 1]?.name) || 'Approaching Corridor'}
-                  </span>
-                  <span className="text-cyan-400 font-bold shrink-0 ml-1">
-                    WP-{(drone.currentWaypointIndex + 1).toString().padStart(2, '0')}
-                  </span>
-                </div>
-              </div>
-
-              {/* Airspace Zone & Proximity indicator */}
-              <div className="flex items-center justify-between text-[11px] font-mono mb-2 px-2 py-1 rounded bg-[#0a0e18] border border-[#182236]">
-                <div className="flex items-center gap-1.5 truncate">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    drone.airspaceStatus === 'PROHIBITED' ? 'bg-rose-500 animate-ping' :
-                    drone.airspaceStatus === 'PERMISSION_REQUIRED' ? 'bg-amber-400 animate-pulse' :
-                    'bg-emerald-400'
-                  }`} />
-                  <span className={`font-bold truncate ${
-                    drone.airspaceStatus === 'PROHIBITED' ? 'text-rose-400' :
-                    drone.airspaceStatus === 'PERMISSION_REQUIRED' ? 'text-amber-400' :
-                    'text-emerald-400'
-                  }`}>
-                    {drone.isRerouting ? 'A* REROUTED' : 
-                     (drone.currentAirspaceZone?.classification === 'YELLOW' && drone.airspaceStatus === 'PERMITTED')
-                      ? 'YELLOW (ATC OK)'
-                      : (drone.currentAirspaceZone?.classification || 'GREEN') + ' ZONE'}
-                  </span>
-                </div>
-                {drone.distanceToNearestRestrictedZoneMeters !== undefined && drone.distanceToNearestRestrictedZoneMeters < 6000 && (
-                  <span className="text-[10px] text-slate-400 shrink-0 ml-1" title={drone.nearestRestrictedZoneName}>
-                    {drone.distanceToNearestRestrictedZoneMeters}m to {drone.nearestRestrictedZoneName?.includes('Airport') ? 'Red Zone' : 'Restricted'}
-                  </span>
-                )}
-              </div>
-
-              {/* Obstacle Threat Warning Chip if Conflict Active */}
-              {activeConflict && (
-                <div className="mb-2 px-2.5 py-1 rounded bg-rose-950/80 border border-rose-700 text-xs font-mono font-bold text-rose-300 flex items-center gap-1.5 animate-pulse">
-                  <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                  <span className="truncate">{activeConflict.obstacleName} ({activeConflict.horizontalDistanceMeters}m)</span>
-                </div>
-              )}
-
-              {/* Footer: Status badge, flight time & speed */}
-              <div className="flex items-center justify-between pt-1.5 border-t border-[#1a253d] text-xs">
-                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider font-mono ${statusBadge.color}`}>
-                  {statusBadge.text}
+                {/* Short ID Badge */}
+                <span className="text-[10px] font-mono font-bold leading-none tracking-tight">
+                  {callsignShort}
                 </span>
 
-                <div className="flex items-center gap-2 text-slate-400 font-mono">
-                  <span title="Ground Speed">{Math.round(drone.vitals.groundSpeedKmh)} km/h</span>
-                  <span>•</span>
-                  <span title="Est Flight Time">{drone.vitals.estimatedFlightTimeMinutes}m rem</span>
+                {/* Mini Battery bar under button */}
+                <div className="w-8 h-1 bg-slate-800 rounded-full overflow-hidden mt-1 border border-slate-700/60">
+                  <div
+                    className={`h-full ${drone.vitals.batteryPercentage > 50 ? 'bg-emerald-400' : 'bg-amber-400'}`}
+                    style={{ width: `${Math.min(100, drone.vitals.batteryPercentage)}%` }}
+                  />
                 </div>
+
+                {/* Tooltip on Hover */}
+                <div className="absolute left-14 bg-[#0d1322] border border-cyan-500/40 text-white text-[11px] font-mono px-2.5 py-1.5 rounded shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
+                  <div className="font-bold text-cyan-300">{drone.callsign}</div>
+                  <div className="text-[10px] text-slate-400">
+                    Alt: {Math.round(drone.vitals.altitudeMeters)}m • {Math.round(drone.vitals.batteryPercentage)}% Bat
+                  </div>
+                  <div className="text-[10px] text-emerald-400">
+                    {drone.missionDestinationName || 'Mission Pad'}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Bottom Expand Toggle Button */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => onToggleExpand && onToggleExpand(!isExpanded)}
+            title={isExpanded ? 'Collapse Panel' : 'Expand Full Aircraft Details'}
+            className="p-1.5 rounded bg-[#101524] border border-[#1d2942] text-slate-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-all"
+          >
+            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+          </button>
+          <span className="text-[10px] font-mono text-cyan-400 font-bold">{totalCount}</span>
+        </div>
+      </aside>
+
+      {/* ─── 2. EXPANDABLE AIRCRAFT DRAWER (WIDTH: ~340px) ─── */}
+      {isExpanded && (
+        <aside className="w-80 md:w-88 h-full bg-[#0c101a]/95 backdrop-blur-md border-r border-[#1f2a40] flex flex-col select-none overflow-hidden z-20 shadow-2xl animate-in slide-in-from-left duration-200">
+          {/* Top Header */}
+          <div className="p-3 border-b border-[#1f2a40] bg-[#101522] shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <h2 className="text-xs font-bold font-mono tracking-wider text-slate-100 uppercase">
+                  FLEET DIRECTORY ({activeCount}/{totalCount})
+                </h2>
+              </div>
+              <button
+                onClick={() => onToggleExpand && onToggleExpand(false)}
+                title="Collapse Aircraft Panel"
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* KPI Mini Summary */}
+            <div className="grid grid-cols-4 gap-1.5 mb-2.5">
+              <div className="bg-[#141b2b] p-1.5 rounded border border-[#212d46] text-center">
+                <div className="text-[9px] font-mono uppercase text-slate-400">Total</div>
+                <div className="text-xs font-bold text-white font-mono">{totalCount}</div>
+              </div>
+              <div className="bg-[#141b2b] p-1.5 rounded border border-cyan-900/40 text-center">
+                <div className="text-[9px] font-mono uppercase text-cyan-400">Active</div>
+                <div className="text-xs font-bold text-cyan-300 font-mono">{activeCount}</div>
+              </div>
+              <div className="bg-[#141b2b] p-1.5 rounded border border-amber-900/40 text-center">
+                <div className="text-[9px] font-mono uppercase text-amber-400">Charge</div>
+                <div className="text-xs font-bold text-amber-300 font-mono">{chargingCount}</div>
+              </div>
+              <div className={`p-1.5 rounded border text-center ${attentionCount > 0 ? 'bg-rose-950/40 border-rose-800' : 'bg-[#141b2b] border-[#212d46]'}`}>
+                <div className={`text-[9px] font-mono uppercase ${attentionCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>Alert</div>
+                <div className={`text-xs font-bold font-mono ${attentionCount > 0 ? 'text-rose-400' : 'text-slate-300'}`}>{attentionCount}</div>
               </div>
             </div>
-          );
-        })}
-      </div>
-    </aside>
+
+            {/* Search Input */}
+            <div className="relative mb-2">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                placeholder="Search callsign, ID or destination..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-[#141b2b] border border-[#243352] rounded pl-8 pr-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+              />
+            </div>
+
+            {/* Filter Pills */}
+            <div className="flex items-center gap-1 overflow-x-auto pb-0.5 text-[11px] font-mono scrollbar-none">
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'active', label: 'Active' },
+                { id: 'delivering', label: 'Delivering' },
+                { id: 'charging', label: 'Charging' },
+                { id: 'attention', label: 'Alert' },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setFilter(item.id)}
+                  className={`px-2 py-0.5 rounded font-medium whitespace-nowrap transition-colors ${
+                    filter === item.id
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 font-bold'
+                      : 'text-slate-400 hover:text-slate-200 bg-[#141a29]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Detailed Drone Cards List */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5 space-y-2 min-h-0">
+            {filteredDrones.map((drone) => {
+              const isSelected = drone.id === selectedDroneId;
+              const activeConflict = obstacleConflicts.find((c) => c.droneId === drone.id);
+              const batColor = getBatteryColor(drone.vitals.batteryPercentage);
+
+              return (
+                <div
+                  key={drone.id}
+                  onClick={() => onSelectDrone(drone.id)}
+                  className={`p-2.5 rounded-lg cursor-pointer transition-all border ${
+                    isSelected
+                      ? 'bg-[#151f33] border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.25)] ring-1 ring-cyan-400/50'
+                      : 'bg-[#121724] border-[#1e2a42] hover:bg-[#161d2e] hover:border-slate-700'
+                  }`}
+                >
+                  {/* Header: Callsign & Altitude */}
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className={`p-1 rounded shrink-0 ${isSelected ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800 text-slate-300'}`}>
+                        <Plane className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold font-mono tracking-wider text-white">
+                          {drone.callsign}
+                        </span>
+                        <span className="text-[10px] text-slate-400 ml-1.5 font-mono">({drone.id})</span>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="text-xs font-bold font-mono text-cyan-300">
+                        {Math.round(drone.vitals.altitudeMeters)}m AGL
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Battery Bar */}
+                  <div className="flex items-center justify-between text-[11px] mb-1.5 font-mono">
+                    <div className="flex items-center gap-1.5 text-slate-400 flex-1 mr-2">
+                      <span className="text-[10px] shrink-0">Battery</span>
+                      <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                        <div
+                          className={`h-full ${batColor.split(' ')[1]}`}
+                          style={{ width: `${Math.min(100, drone.vitals.batteryPercentage)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className={`text-[11px] font-bold shrink-0 ${batColor.split(' ')[0]}`}>
+                      {Math.round(drone.vitals.batteryPercentage)}%
+                    </span>
+                  </div>
+
+                  {/* Lat/Lon Readout */}
+                  <div className="text-[10px] font-mono text-slate-300 mb-1.5 bg-[#0b0f19] px-2 py-0.5 rounded border border-[#1b253b] flex items-center justify-between">
+                    <span>Lat: {drone.vitals.latitude.toFixed(5)}°</span>
+                    <span>Lon: {drone.vitals.longitude.toFixed(5)}°</span>
+                  </div>
+
+                  {/* Mission Target & Next WP */}
+                  <div className="text-[10px] font-mono mb-1.5 px-2 py-1 rounded bg-[#0b101c] border border-cyan-900/40">
+                    <div className="flex items-center justify-between text-slate-300 mb-0.5">
+                      <div className="flex items-center gap-1 truncate">
+                        <Navigation className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <span className="font-bold text-cyan-200 truncate" title={drone.missionDestinationName || 'Destination Pad'}>
+                          {drone.missionDestinationName || 'CMCH Helipad'}
+                        </span>
+                      </div>
+                      {drone.distanceRemainingKm !== undefined && (
+                        <span className="text-cyan-300 font-bold shrink-0 ml-1">
+                          {drone.distanceRemainingKm.toFixed(1)} km
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between text-cyan-300 pt-0.5 border-t border-[#1b253b]">
+                      <span className="truncate" title={drone.nextWaypointName || 'Approaching Corridor'}>
+                        Next: {drone.nextWaypointName || 'Approaching Corridor'}
+                      </span>
+                      <span className="text-cyan-400 font-bold shrink-0 ml-1">
+                        WP-{(drone.currentWaypointIndex + 1).toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Airspace status pill */}
+                  <div className="flex items-center justify-between text-[10px] font-mono px-2 py-0.5 rounded bg-[#0a0e18] border border-[#182236]">
+                    <div className="flex items-center gap-1">
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        drone.airspaceStatus === 'PROHIBITED' ? 'bg-rose-500 animate-ping' :
+                        drone.airspaceStatus === 'PERMISSION_REQUIRED' ? 'bg-amber-400' :
+                        'bg-emerald-400'
+                      }`} />
+                      <span className={`font-bold ${
+                        drone.airspaceStatus === 'PROHIBITED' ? 'text-rose-400' :
+                        drone.airspaceStatus === 'PERMISSION_REQUIRED' ? 'text-amber-400' :
+                        'text-emerald-400'
+                      }`}>
+                        {drone.isRerouting ? 'A* REROUTED' : (drone.currentAirspaceZone?.classification || 'GREEN') + ' ZONE'}
+                      </span>
+                    </div>
+                    <span className="text-slate-400">
+                      {Math.round(drone.vitals.groundSpeedKmh)} km/h
+                    </span>
+                  </div>
+
+                  {/* Obstacle warning */}
+                  {activeConflict && (
+                    <div className="mt-1.5 px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700 text-[10px] font-mono font-bold text-rose-300 flex items-center gap-1 animate-pulse">
+                      <ShieldAlert className="w-3 h-3 text-rose-400 shrink-0" />
+                      <span className="truncate">{activeConflict.obstacleName} ({activeConflict.horizontalDistanceMeters}m)</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
+    </div>
   );
 };

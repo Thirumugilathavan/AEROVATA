@@ -77,7 +77,7 @@ const DRONE_THEME_COLORS: Record<string, string> = {
   'AV-04': '#10b981', // Emerald - UTM Airspace Patrol
 };
 
-// Realistic Professional Aerospace Delivery Quadcopter Marker
+// High-Fidelity 3D Drone Model Generator (Hexacopter, Quadcopter, Octocopter, Patrol Scout)
 const buildMarkerHtml = (
   drone: Drone, 
   isSelected: boolean, 
@@ -92,8 +92,15 @@ const buildMarkerHtml = (
   const hasThreat = activeConflict !== null || drone.airspaceStatus === 'PROHIBITED' || drone.airspaceStatus === 'PERMISSION_REQUIRED';
   const threatColor = (activeConflict?.severity === 'critical' || drone.airspaceStatus === 'PROHIBITED') ? '#ef4444' : '#f59e0b';
 
-  const shadowBlur = Math.min(24, Math.max(6, alt / 3.2));
-  const shadowScale = Math.max(0.5, Math.min(1.4, 1 - alt / 220));
+  // Physical flight angles
+  const pitch = Math.min(22, Math.max(3, (speed / 50) * 16));
+  const bankAngle = drone.targetHeadingDegrees !== undefined 
+    ? ((drone.targetHeadingDegrees - heading + 540) % 360 - 180) * 0.45 
+    : 0;
+  const roll = Math.max(-20, Math.min(20, bankAngle));
+
+  const shadowBlur = Math.min(22, Math.max(4, alt / 3.5));
+  const shadowScale = Math.max(0.55, Math.min(1.3, 1 - alt / 240));
 
   const displayCallsign = drone.callsign.includes('DRONE') 
     ? drone.callsign 
@@ -106,6 +113,11 @@ const buildMarkerHtml = (
                       drone.status === 'returning_to_base' ? 'RETURNING' :
                       drone.status === 'charging' ? 'CHARGING' : 'ACTIVE';
 
+  // Model-specific 3D SVG Geometry
+  const isHexacopter = drone.id === 'AV-01' || drone.model.toLowerCase().includes('hex');
+  const isOctocopter = drone.id === 'AV-03' || drone.model.toLowerCase().includes('octo') || drone.model.toLowerCase().includes('titan');
+  const isScout = drone.id === 'AV-04' || drone.model.toLowerCase().includes('patrol') || drone.model.toLowerCase().includes('scout');
+
   return `
     <div style="
       display: flex;
@@ -113,28 +125,28 @@ const buildMarkerHtml = (
       align-items: center;
       cursor: pointer;
       user-select: none;
-      transform: scale(${isSelected ? 1.25 : 1});
+      transform: scale(${isSelected ? 1.22 : 1});
       transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
       position: relative;
     ">
-      <!-- 1. CALLSIGN BADGE - POSITIONED STRICTLY ABOVE DRONE -->
+      <!-- 1. CALLSIGN BILLBOARD BADGE (POSITIONED CLEANLY ABOVE DRONE) -->
       <div style="
         display: flex;
         flex-direction: column;
         align-items: center;
-        margin-bottom: 5px;
+        margin-bottom: 4px;
         pointer-events: none;
-        z-index: 5;
+        z-index: 10;
       ">
         <div style="
-          background: rgba(8, 12, 22, 0.95);
-          border: ${isSelected ? '2px solid #00f0ff' : hasThreat ? `1px solid ${threatColor}` : '1px solid #22324d'};
+          background: rgba(8, 12, 22, 0.94);
+          border: ${isSelected ? '2px solid #00f0ff' : hasThreat ? `1.5px solid ${threatColor}` : '1px solid #22324d'};
           border-radius: 4px;
-          padding: 3px 8px;
+          padding: 2.5px 7px;
           display: flex;
           align-items: center;
           gap: 6px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px rgba(0,240,255,0.7)' : 'none'};
+          box-shadow: 0 4px 14px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px rgba(0,240,255,0.7)' : 'none'};
           backdrop-filter: blur(8px);
           white-space: nowrap;
         ">
@@ -162,95 +174,208 @@ const buildMarkerHtml = (
             font-family: ui-monospace, monospace;
             font-size: 10px;
             font-weight: 700;
-            letter-spacing: 0.03em;
           ">
             ${statusLabel}
           </span>
         </div>
       </div>
 
-      <!-- 2. PHYSICAL DRONE MODEL (68x68 Aerospace Quadcopter) -->
+      <!-- 2. PHYSICAL 3D AIRCRAFT MODEL (80x80 WITH ROTATING PROPELLERS & PITCH/ROLL) -->
       <div style="
         position: relative;
-        width: 68px;
-        height: 68px;
+        width: 80px;
+        height: 80px;
         display: flex;
         align-items: center;
         justify-content: center;
       ">
+        <!-- Selection Halo Ring -->
         ${isSelected ? `
-          <div style="
+          <div class="aerovata-beacon-ring" style="
             position: absolute;
-            width: 82px;
-            height: 82px;
+            width: 96px;
+            height: 96px;
             border-radius: 50%;
             border: 2px solid #00f0ff;
             background: radial-gradient(circle, rgba(0, 240, 255, 0.25) 0%, rgba(0, 240, 255, 0.05) 60%, transparent 80%);
-            box-shadow: 0 0 22px #00f0ff, inset 0 0 14px rgba(0, 240, 255, 0.5);
-            animation: pulse 1.5s infinite;
+            box-shadow: 0 0 24px #00f0ff, inset 0 0 16px rgba(0, 240, 255, 0.5);
             pointer-events: none;
             z-index: 1;
           "></div>
         ` : ''}
+
+        <!-- Altitude Ground Projection Shadow -->
         <div style="
           position: absolute;
-          width: 52px;
-          height: 52px;
+          width: 58px;
+          height: 58px;
           border-radius: 50%;
-          background: radial-gradient(circle, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 75%);
+          background: radial-gradient(circle, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 75%);
           filter: blur(${shadowBlur}px);
-          transform: scale(${shadowScale}) translateY(${Math.min(18, alt / 4)}px);
+          transform: scale(${shadowScale}) translateY(${Math.min(20, alt / 3.8)}px);
           pointer-events: none;
           z-index: 0;
         "></div>
 
+        <!-- Threat Warning Orbit -->
         ${hasThreat ? `
           <div style="
             position: absolute;
-            width: 72px;
-            height: 72px;
+            width: 84px;
+            height: 84px;
             border-radius: 50%;
             border: 1.5px dashed ${threatColor};
-            animation: spin 6s linear infinite;
-            opacity: 0.85;
+            animation: spin 5s linear infinite;
+            opacity: 0.9;
             pointer-events: none;
+            z-index: 1;
           "></div>
         ` : ''}
 
-        <svg width="68" height="68" viewBox="0 0 68 68" fill="none" style="
-          transform: rotate(${heading}deg);
-          transition: transform 0.3s ease-out;
-          filter: drop-shadow(0 4px 8px rgba(0,0,0,0.7));
+        <!-- 3D Drone Body with Dynamic Pitch/Roll and Rotors -->
+        <div style="
+          width: 78px;
+          height: 78px;
+          perspective: 750px;
+          transform-style: preserve-3d;
           position: relative;
           z-index: 2;
         ">
-          <line x1="16" y1="16" x2="52" y2="52" stroke="#334155" stroke-width="4.2" stroke-linecap="round"/>
-          <line x1="52" y1="16" x2="16" y2="52" stroke="#334155" stroke-width="4.2" stroke-linecap="round"/>
-          <line x1="16" y1="16" x2="52" y2="52" stroke="#475569" stroke-width="2.2" stroke-linecap="round"/>
-          <line x1="52" y1="16" x2="16" y2="52" stroke="#475569" stroke-width="2.2" stroke-linecap="round"/>
+          <svg width="78" height="78" viewBox="0 0 78 78" fill="none" style="
+            transform: rotateX(${pitch}deg) rotateZ(${heading}deg) rotateY(${roll}deg);
+            transition: transform 0.25s ease-out;
+            filter: drop-shadow(0 6px 12px rgba(0,0,0,0.85));
+            overflow: visible;
+          ">
+            <defs>
+              <linearGradient id="armGrad-${drone.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#475569" />
+                <stop offset="50%" stop-color="#1e293b" />
+                <stop offset="100%" stop-color="#334155" />
+              </linearGradient>
+              <linearGradient id="fuselageGrad-${drone.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#1e293b" />
+                <stop offset="50%" stop-color="#0f172a" />
+                <stop offset="100%" stop-color="#090d16" />
+              </linearGradient>
+              <radialGradient id="rotorBlurGrad-${drone.id}" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="${baseColor}" stop-opacity="0.35" />
+                <stop offset="70%" stop-color="${baseColor}" stop-opacity="0.12" />
+                <stop offset="100%" stop-color="${baseColor}" stop-opacity="0" />
+              </radialGradient>
+            </defs>
 
-          <circle cx="16" cy="16" r="10" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 2" fill="rgba(56, 189, 248, 0.12)"/>
-          <circle cx="52" cy="16" r="10" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 2" fill="rgba(56, 189, 248, 0.12)"/>
-          <circle cx="16" cy="52" r="10" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 2" fill="rgba(56, 189, 248, 0.12)"/>
-          <circle cx="52" cy="52" r="10" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 2" fill="rgba(56, 189, 248, 0.12)"/>
+            ${isHexacopter ? `
+              <!-- HEXACOPTER 6-BOOM RADIAL CONFIGURATION (AV-01 SkyHauler X-6 Pro) -->
+              <!-- 6 Carbon Tubular Arms -->
+              <line x1="39" y1="39" x2="39" y2="12" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="63" y2="25" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="63" y2="53" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="39" y2="66" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="15" y2="53" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="15" y2="25" stroke="url(#armGrad-${drone.id})" stroke-width="3.8" stroke-linecap="round"/>
 
-          <circle cx="16" cy="16" r="4.5" fill="#0f172a" stroke="#64748b" stroke-width="1.5"/>
-          <circle cx="52" cy="16" r="4.5" fill="#0f172a" stroke="#64748b" stroke-width="1.5"/>
-          <circle cx="16" cy="52" r="4.5" fill="#0f172a" stroke="#64748b" stroke-width="1.5"/>
-          <circle cx="52" cy="52" r="4.5" fill="#0f172a" stroke="#64748b" stroke-width="1.5"/>
+              <!-- 6 Spinning Rotor Discs -->
+              <g class="aerovata-rotor-spin" style="transform-origin: 39px 12px;"><circle cx="39" cy="12" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="29" y1="12" x2="49" y2="12" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 63px 25px;"><circle cx="63" cy="25" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="53" y1="25" x2="73" y2="25" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 63px 53px;"><circle cx="63" cy="53" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="53" y1="53" x2="73" y2="53" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 39px 66px;"><circle cx="39" cy="66" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="29" y1="66" x2="49" y2="66" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 15px 53px;"><circle cx="15" cy="53" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="5" y1="53" x2="25" y2="53" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 15px 25px;"><circle cx="15" cy="25" r="10" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="5" y1="25" x2="25" y2="25" stroke="#e2e8f0" stroke-width="1.8" stroke-linecap="round"/></g>
 
-          <rect x="25" y="24" width="18" height="20" rx="4" fill="#0b111e" stroke="${hasThreat ? threatColor : baseColor}" stroke-width="1.8"/>
-          <polygon points="34,20 28,26 40,26" fill="${baseColor}"/>
-          <rect x="28" y="29" width="12" height="10" rx="2" fill="#1e293b" stroke="#3b82f6" stroke-width="0.8"/>
-          <circle cx="34" cy="34" r="3" fill="${hasThreat ? threatColor : baseColor}"/>
+              <!-- 6 Motor Bells -->
+              <circle cx="39" cy="12" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
+              <circle cx="63" cy="25" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
+              <circle cx="63" cy="53" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
+              <circle cx="39" cy="66" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
+              <circle cx="15" cy="53" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
+              <circle cx="15" cy="25" r="4.2" fill="#0f172a" stroke="#94a3b8" stroke-width="1.2"/>
 
-          <circle cx="34" cy="22" r="1.8" fill="#ffffff" fill-opacity="0.95"/>
-          <circle cx="10" cy="34" r="1.8" fill="#ef4444"/>
-          <circle cx="58" cy="34" r="1.8" fill="#10b981"/>
-        </svg>
+              <!-- Central Hexagonal Carbon Fuselage -->
+              <polygon points="39,26 49,32 49,46 39,52 29,46 29,32" fill="url(#fuselageGrad-${drone.id})" stroke="${baseColor}" stroke-width="1.8"/>
+              <rect x="34" y="34" width="10" height="10" rx="2" fill="#020617" stroke="#38bdf8" stroke-width="1"/>
+              <!-- Red Cross Medical Emblem on Cargo Pod -->
+              <rect x="36.5" y="38" width="5" height="2" fill="#ef4444"/>
+              <rect x="38" y="36.5" width="2" height="5" fill="#ef4444"/>
+            ` : isOctocopter ? `
+              <!-- OCTOCOPTER 8-ARM HEAVY LIFTER CONFIGURATION (AV-03 TitanCargo) -->
+              <line x1="39" y1="39" x2="39" y2="10" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="60" y2="18" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="68" y2="39" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="60" y2="60" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="39" y2="68" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="18" y2="60" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="10" y2="39" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+              <line x1="39" y1="39" x2="18" y2="18" stroke="url(#armGrad-${drone.id})" stroke-width="4.2" stroke-linecap="round"/>
+
+              <!-- 8 Spinning Rotors with Amber Tips -->
+              <g class="aerovata-rotor-spin" style="transform-origin: 39px 10px;"><circle cx="39" cy="10" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="30" y1="10" x2="48" y2="10" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 60px 18px;"><circle cx="60" cy="18" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="51" y1="18" x2="69" y2="18" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 68px 39px;"><circle cx="68" cy="39" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="59" y1="39" x2="77" y2="39" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 60px 60px;"><circle cx="60" cy="60" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="51" y1="60" x2="69" y2="60" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 39px 68px;"><circle cx="39" cy="68" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="30" y1="68" x2="48" y2="68" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 18px 60px;"><circle cx="18" cy="60" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="9" y1="60" x2="27" y2="60" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 10px 39px;"><circle cx="10" cy="39" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="1" y1="39" x2="19" y2="39" stroke="#f59e0b" stroke-width="1.8"/></g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 18px 18px;"><circle cx="18" cy="18" r="9" fill="url(#rotorBlurGrad-${drone.id})"/><line x1="9" y1="18" x2="27" y2="18" stroke="#f59e0b" stroke-width="1.8"/></g>
+
+              <!-- Central Heavy Ruggedized Body -->
+              <rect x="29" y="29" width="20" height="20" rx="4" fill="url(#fuselageGrad-${drone.id})" stroke="#f59e0b" stroke-width="2"/>
+              <rect x="33" y="33" width="12" height="12" rx="2" fill="#0f172a" stroke="#cbd5e1" stroke-width="1"/>
+            ` : `
+              <!-- HIGH-SPEED QUADCOPTER CONFIGURATION (AV-02 MediCourier / AV-04 AeroScout) -->
+              <!-- 4 Swept Carbon Booms in X-Frame -->
+              <line x1="18" y1="18" x2="60" y2="60" stroke="url(#armGrad-${drone.id})" stroke-width="4.5" stroke-linecap="round"/>
+              <line x1="60" y1="18" x2="18" y2="60" stroke="url(#armGrad-${drone.id})" stroke-width="4.5" stroke-linecap="round"/>
+
+              <!-- 4 High-Speed Spinning Propellers with Motion Blur -->
+              <g class="aerovata-rotor-spin" style="transform-origin: 18px 18px;">
+                <circle cx="18" cy="18" r="12" fill="url(#rotorBlurGrad-${drone.id})"/>
+                <line x1="6" y1="18" x2="30" y2="18" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round"/>
+              </g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 60px 18px;">
+                <circle cx="60" cy="18" r="12" fill="url(#rotorBlurGrad-${drone.id})"/>
+                <line x1="48" y1="18" x2="72" y2="18" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round"/>
+              </g>
+              <g class="aerovata-rotor-spin" style="transform-origin: 60px 60px;">
+                <circle cx="60" cy="60" r="12" fill="url(#rotorBlurGrad-${drone.id})"/>
+                <line x1="48" y1="60" x2="72" y2="60" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round"/>
+              </g>
+              <g class="aerovata-rotor-spin-rev" style="transform-origin: 18px 60px;">
+                <circle cx="18" cy="60" r="12" fill="url(#rotorBlurGrad-${drone.id})"/>
+                <line x1="6" y1="60" x2="30" y2="60" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round"/>
+              </g>
+
+              <!-- 4 Anodized Brushless Motor Bells -->
+              <circle cx="18" cy="18" r="4.8" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+              <circle cx="60" cy="18" r="4.8" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+              <circle cx="60" cy="60" r="4.8" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+              <circle cx="18" cy="60" r="4.8" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+
+              <!-- Central Aerodynamic Carbon Canopy & Avionics -->
+              <rect x="28" y="27" width="22" height="24" rx="6" fill="url(#fuselageGrad-${drone.id})" stroke="${baseColor}" stroke-width="1.8"/>
+              <!-- Nose Direction Arrow / Cockpit Windscreen -->
+              <polygon points="39,22 32,30 46,30" fill="${baseColor}"/>
+              <rect x="32" y="32" width="14" height="12" rx="3" fill="#0b111e" stroke="#38bdf8" stroke-width="1"/>
+              <!-- Central Gimbal / Payload Sensor Dome -->
+              <circle cx="39" cy="38" r="3.5" fill="${hasThreat ? threatColor : baseColor}"/>
+            `}
+
+            <!-- FAA Navigation Lighting (Strobes) -->
+            <!-- Red Port (Left) Strobe -->
+            <circle cx="14" cy="39" r="2.2" fill="#ef4444" class="aerovata-strobe"/>
+            <!-- Green Starboard (Right) Strobe -->
+            <circle cx="64" cy="39" r="2.2" fill="#10b981" class="aerovata-strobe"/>
+            <!-- White Anti-Collision Tail Beacon -->
+            <circle cx="39" cy="68" r="2" fill="#ffffff" class="aerovata-strobe"/>
+            <!-- Forward Dual Searchlight Beams -->
+            <polygon points="36,24 28,6 50,6 42,24" fill="url(#rotorBlurGrad-${drone.id})" opacity="0.4"/>
+            <circle cx="37" cy="24" r="1.5" fill="#ffffff"/>
+            <circle cx="41" cy="24" r="1.5" fill="#ffffff"/>
+          </svg>
+        </div>
       </div>
 
-      <!-- 3. TELEMETRY READOUT STRIP UNDERNEATH DRONE -->
+      <!-- 3. TELEMETRY CAPSULE STRIP UNDERNEATH DRONE -->
       <div style="
         background: rgba(10, 15, 26, 0.94);
         border: 1px solid ${hasThreat ? threatColor : '#25344f'};
@@ -262,7 +387,7 @@ const buildMarkerHtml = (
         gap: 6px;
         backdrop-filter: blur(8px);
         pointer-events: none;
-        z-index: 3;
+        z-index: 10;
         box-shadow: 0 2px 6px rgba(0,0,0,0.7);
       ">
         <span style="color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
@@ -278,7 +403,7 @@ const buildMarkerHtml = (
         </span>
       </div>
 
-      <!-- 4. THREAT BANNER -->
+      <!-- 4. ACTIVE THREAT BANNER -->
       ${hasThreat ? `
         <div style="
           margin-top: 3px;
@@ -294,7 +419,7 @@ const buildMarkerHtml = (
           border: 1px solid #f87171;
           box-shadow: 0 0 10px rgba(239, 68, 68, 0.85);
           pointer-events: none;
-          z-index: 4;
+          z-index: 10;
         ">
           ${drone.isRerouting ? 'A* REROUTE ACTIVE' : activeConflict ? `COLLISION RISK: ${activeConflict.obstacleName.substring(0, 14)} (${activeConflict.horizontalDistanceMeters}m)` : `${drone.airspaceStatus}: AIRSPACE HAZARD`}
         </div>
