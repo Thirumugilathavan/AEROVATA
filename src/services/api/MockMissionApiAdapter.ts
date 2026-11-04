@@ -6,10 +6,10 @@
  * Backed by the standalone SimulationMissionController.
  */
 
-import type { IMissionApiAdapter } from './types.ts';
-import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission.ts';
-import { SimulationMissionController } from '../../controller/SimulationMissionController.ts';
-import { ALL_PRESET_MISSIONS, MISSION_HOSPITAL_RUSH } from './missionPresets.ts';
+import type { IMissionApiAdapter } from './types';
+import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission';
+import { SimulationMissionController } from '../../controller/SimulationMissionController';
+import { ALL_PRESET_MISSIONS, MISSION_COIMBATORE_CMCH } from './missionPresets';
 
 export class MockMissionApiAdapter implements IMissionApiAdapter {
   private baseUrl: string = '/api/v1 (Mock In-Memory)';
@@ -19,7 +19,7 @@ export class MockMissionApiAdapter implements IMissionApiAdapter {
 
   constructor(controller?: SimulationMissionController) {
     this.controller = controller || new SimulationMissionController();
-    this.currentMission = JSON.parse(JSON.stringify(MISSION_HOSPITAL_RUSH));
+    this.currentMission = JSON.parse(JSON.stringify(MISSION_COIMBATORE_CMCH));
     this.controller.loadMission(this.currentMission);
   }
 
@@ -60,19 +60,19 @@ export class MockMissionApiAdapter implements IMissionApiAdapter {
     return {
       droneId,
       timestamp: Date.now(),
-      lat: -37.8155,
-      lng: 145.1220,
-      altitudeMeters: 85,
-      headingDegrees: 45,
-      groundSpeedKmh: 42,
-      verticalSpeedMs: 0.1,
+      lat: 11.0260,
+      lng: 77.0120,
+      altitudeMeters: 65,
+      headingDegrees: 245,
+      groundSpeedKmh: 45,
+      verticalSpeedMs: 0.0,
       batteryPercentage: 92,
       batteryVoltage: 24.4,
       signalQualityPercent: 98,
       rtkFix: 'RTK_FIX',
-      satellites: 18,
+      satellites: 20,
       currentCheckpointIndex: 1,
-      distanceToNextCheckpointMeters: 280,
+      distanceToNextCheckpointMeters: 560,
       missionStatus: 'idle',
       isDwellActive: false,
     };
@@ -99,40 +99,35 @@ export class MockMissionApiAdapter implements IMissionApiAdapter {
 
   public async startSimulation(missionId: string): Promise<{ success: boolean; state: MissionState; message?: string }> {
     await this.simulateLatency();
-    const active = this.controller.getMission();
-    if (!active || active.id !== missionId) {
-      const target = this.findMission(missionId);
-      const res = this.controller.loadMission(target);
-      if (!res.success) {
-        return { success: false, state: 'error', message: res.error };
-      }
+    const mission = this.findMission(missionId);
+    if (!this.controller.getMission() || this.controller.getMission()?.id !== missionId) {
+      this.controller.loadMission(mission);
     }
-
-    const started = this.controller.start();
+    const success = this.controller.start();
     return {
-      success: started,
+      success,
       state: this.controller.getState(),
-      message: started ? 'Simulation started successfully' : 'Failed to start simulation',
+      message: success ? 'Simulation started successfully' : 'Unable to start simulation from current state',
     };
   }
 
   public async pauseSimulation(missionId: string): Promise<{ success: boolean; state: MissionState; message?: string }> {
     await this.simulateLatency();
-    const paused = this.controller.pause();
+    const success = this.controller.pause();
     return {
-      success: paused,
+      success,
       state: this.controller.getState(),
-      message: paused ? 'Simulation paused' : 'Failed to pause simulation',
+      message: success ? 'Simulation paused' : 'Unable to pause simulation',
     };
   }
 
   public async resumeSimulation(missionId: string): Promise<{ success: boolean; state: MissionState; message?: string }> {
     await this.simulateLatency();
-    const resumed = this.controller.resume();
+    const success = this.controller.resume();
     return {
-      success: resumed,
+      success,
       state: this.controller.getState(),
-      message: resumed ? 'Simulation resumed' : 'Failed to resume simulation',
+      message: success ? 'Simulation resumed' : 'Unable to resume simulation',
     };
   }
 
@@ -142,25 +137,29 @@ export class MockMissionApiAdapter implements IMissionApiAdapter {
     return {
       success: true,
       state: 'idle',
-      message: 'Simulation reset to origin checkpoint',
+      message: 'Simulation reset to origin',
     };
   }
 
   public async submitMission(mission: Mission): Promise<{ success: boolean; missionId: string; error?: string }> {
     await this.simulateLatency();
-    const res = this.controller.loadMission(mission);
-    if (!res.success) {
-      return { success: false, missionId: mission.id, error: res.error };
+    const result = this.controller.loadMission(mission);
+    return {
+      success: result.success,
+      missionId: mission.id,
+      error: result.error,
+    };
+  }
+
+  private findMission(id: string): Mission {
+    const found = ALL_PRESET_MISSIONS.find((m) => m.id === id);
+    if (found) {
+      return JSON.parse(JSON.stringify(found));
     }
-    return { success: true, missionId: mission.id };
+    return JSON.parse(JSON.stringify(MISSION_COIMBATORE_CMCH));
   }
 
-  private findMission(missionId: string): Mission {
-    const found = ALL_PRESET_MISSIONS.find((m) => m.id === missionId);
-    return found ? JSON.parse(JSON.stringify(found)) : JSON.parse(JSON.stringify(MISSION_HOSPITAL_RUSH));
-  }
-
-  private async simulateLatency(ms: number = 80): Promise<void> {
+  private simulateLatency(ms: number = 80): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

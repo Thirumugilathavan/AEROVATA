@@ -6,8 +6,8 @@
  * Configurable base URL. Adheres strictly to the AEROVATA API contract.
  */
 
-import type { IMissionApiAdapter } from './types.ts';
-import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission.ts';
+import type { IMissionApiAdapter } from './types';
+import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission';
 
 export class HttpMissionApiAdapter implements IMissionApiAdapter {
   private baseUrl: string;
@@ -99,17 +99,12 @@ export class HttpMissionApiAdapter implements IMissionApiAdapter {
           const errJson = await response.json();
           errDetail = errJson.detail || errJson.message || response.statusText;
         } catch {
-          // Response body was not JSON
+          // ignore
         }
-        throw new Error(`API Error [HTTP ${response.status}]: ${errDetail}`);
+        throw new Error(`API HTTP ${response.status}: ${errDetail}`);
       }
 
       return await response.json();
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error(`API request timed out after ${this.timeoutMs}ms for ${endpoint}`);
-      }
-      throw err;
     } finally {
       clearTimeout(timeout);
     }

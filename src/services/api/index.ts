@@ -8,11 +8,11 @@
  * 3. 'px4'  - Genuine PX4 Autopilot SITL & Gazebo MAVLink integration
  */
 
-import type { IMissionApiAdapter } from './types.ts';
-import { MockMissionApiAdapter } from './MockMissionApiAdapter.ts';
-import { HttpMissionApiAdapter } from './HttpMissionApiAdapter.ts';
-import { Px4SitlAdapter } from '../px4/Px4SitlAdapter.ts';
-import { SimulationMissionController } from '../../controller/SimulationMissionController.ts';
+import type { IMissionApiAdapter } from './types';
+import { MockMissionApiAdapter } from './MockMissionApiAdapter';
+import { HttpMissionApiAdapter } from './HttpMissionApiAdapter';
+import { Px4SitlAdapter } from '../px4/Px4SitlAdapter';
+import { SimulationMissionController } from '../../controller/SimulationMissionController';
 
 export type ApiMode = 'mock' | 'http' | 'px4';
 
@@ -76,6 +76,6 @@ class ApiServiceManager {
 }
 
 export const apiService = new ApiServiceManager();
-export * from './types.ts';
-export * from './missionPresets.ts';
+export * from './types';
+export * from './missionPresets';
 export { MockMissionApiAdapter, HttpMissionApiAdapter, Px4SitlAdapter };

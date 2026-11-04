@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { Header } from './components/Header';
 import { FleetSidebar } from './components/FleetSidebar';
@@ -9,6 +9,7 @@ import { DroneDetailPanel } from './components/DroneDetailPanel';
 import { RightSidebar } from './components/RightSidebar';
 import { RouteReplanModal } from './components/RouteReplanModal';
 import { MissionReplayModal } from './components/MissionReplayModal';
+import { NotificationPanel } from './components/NotificationPanel';
 import { FleetView } from './components/FleetView';
 import { MissionsView } from './components/MissionsView';
 import { AirspaceView } from './components/AirspaceView';
@@ -22,11 +23,14 @@ import { Px4SitlStatusBanner } from './components/Px4SitlStatusBanner';
 import { Px4SetupModal } from './components/Px4SetupModal';
 import { apiService } from './services/api/index';
 import type { Mission, MissionTelemetry } from './types/mission';
+import { Navigation } from 'lucide-react';
 import { 
   INITIAL_DRONES, 
   INITIAL_GEOFENCES, 
   INITIAL_ALERTS, 
-  INITIAL_FLIGHT_LOGS 
+  INITIAL_FLIGHT_LOGS,
+  COIMBATORE_OBSTACLES,
+  INITIAL_NOTIFICATIONS
 } from './data/mockFleet';
 import { 
   Drone, 
@@ -34,17 +38,23 @@ import {
   AirspaceAlert, 
   FlightLogEntry, 
   AirspaceConflict,
-  Waypoint 
+  Waypoint,
+  Obstacle,
+  ObstacleConflict,
+  NotificationItem,
+  OfficialAirspaceZone,
+  RouteComparisonParameter
 } from './types/fleet';
 import { 
   updateSimulationTick, 
   generateSmartReplan 
 } from './services/telemetryEngine';
+import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from './data/officialAirspaceData';
 
 export function App() {
   // Navigation tab
-  // Dedicated route detection for /live-camera
-  const [activeTab, setActiveTab] = useState<'live' | 'camera' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about'>(() => {
+  // Navigation tab with /live-camera URL route detection
+  const [activeTab, setActiveTab] = useState<'live' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'camera' | 'about'>(() => {
     if (typeof window !== 'undefined') {
       if (window.location.pathname === '/live-camera' || window.location.hash === '#/live-camera') {
         return 'camera';
@@ -53,98 +63,58 @@ export function App() {
     return 'live';
   });
 
-  // Standalone Checkpoint Simulation Controller
+  // Standalone Checkpoint Simulation Controller & PX4 SITL Gateway
   const missionController = apiService.getController();
   const [checkpointMission, setCheckpointMission] = useState<Mission | null>(() => missionController.getMission());
   const [checkpointTelemetry, setCheckpointTelemetry] = useState<MissionTelemetry | null>(() => missionController.getTelemetry());
-  const [bottomTabMode, setBottomTabMode] = useState<'checkpoint' | 'detail' | 'logs'>('checkpoint');
+  const [bottomTabMode, setBottomTabMode] = useState<'detail' | 'checkpoint' | 'logs'>('detail');
   const [isApiContractOpen, setIsApiContractOpen] = useState<boolean>(false);
   const [isPx4SetupOpen, setIsPx4SetupOpen] = useState<boolean>(false);
 
-  // Core state
+  // Core Simulation & Fleet state (Coimbatore, Tamil Nadu)
   const [drones, setDrones] = useState<Drone[]>(INITIAL_DRONES);
   const [selectedDroneId, setSelectedDroneId] = useState<string | null>('AV-01');
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
   const [geofences, setGeofences] = useState<GeofenceZone[]>(INITIAL_GEOFENCES);
+  const [officialAirspaceZones, setOfficialAirspaceZones] = useState<OfficialAirspaceZone[]>(OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
+  const [obstacles, setObstacles] = useState<Obstacle[]>(COIMBATORE_OBSTACLES);
   const [alerts, setAlerts] = useState<AirspaceAlert[]>(INITIAL_ALERTS);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
   const [flightLogs, setFlightLogs] = useState<FlightLogEntry[]>(INITIAL_FLIGHT_LOGS);
   const [conflicts, setConflicts] = useState<AirspaceConflict[]>([]);
+  const [obstacleConflicts, setObstacleConflicts] = useState<ObstacleConflict[]>([]);
 
-  // Map view mode
-  const [viewMode, setViewMode] = useState<'2d' | '3d' | 'pov'>('2d');
+  // Map view mode (2D / 3D / POV Cockpit)
+  const [viewMode, setViewMode] = useState<'2d' | '3d' | 'pov'>('3d');
 
   // Sidebar filters
   const [filter, setFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
-  // Settings & Configuration
+  // Simulation controls (Req 8.C)
+  const [isSimRunning, setIsSimRunning] = useState<boolean>(true);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(1);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
   const [safetyReservePercent, setSafetyReservePercent] = useState<number>(20);
   const [separationDistanceMeters, setSeparationDistanceMeters] = useState<number>(250);
+  const [obstacleWarningRadiusMeters, setObstacleWarningRadiusMeters] = useState<number>(40);
 
   // Modals & Panels
   const [isDetailPanelOpen, setIsDetailPanelOpen] = useState<boolean>(true);
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState<boolean>(false);
   const [replanData, setReplanData] = useState<{
     drone: Drone;
     proposedRoute: Waypoint[];
     addedDistanceKm: number;
     addedDelayMinutes: number;
+    originalDistanceKm?: number;
+    alternativeDistanceKm?: number;
+    comparisonTable?: RouteComparisonParameter[];
   } | null>(null);
   const [isReplayModalOpen, setIsReplayModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(false);
 
-  // Synthetic Radar Beep using Web Audio API
-  const playRadarBeep = (freq = 880) => {
-    if (isMuted) return;
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.12);
-    } catch {
-      // Ignore if user hasn't interacted with audio context yet
-    }
-  };
-
-  // Deterministic Telemetry Simulation Engine
-  useEffect(() => {
-    const tickInterval = 1000 / simulationSpeed;
-    const timer = setInterval(() => {
-      setDrones((prevDrones) => {
-        const deltaSeconds = 1;
-        const res = updateSimulationTick(prevDrones, deltaSeconds, geofences);
-
-        // Prepend new flight logs if emitted
-        if (res.newLogs.length > 0) {
-          setFlightLogs((prevLogs) => [...res.newLogs, ...prevLogs].slice(0, 50));
-          playRadarBeep(640);
-        }
-
-        // Update airspace conflicts
-        setConflicts(res.conflicts);
-        if (res.conflicts.length > 0) {
-          playRadarBeep(1200);
-        }
-
-        return res.updatedDrones;
-      });
-    }, tickInterval);
-
-    return () => clearInterval(timer);
-  }, [simulationSpeed, geofences, isMuted]);
-
-
-  // URL sync for dedicated /live-camera route
+  // URL sync for /live-camera route
   useEffect(() => {
     const handlePopState = () => {
       const isCam = window.location.pathname === '/live-camera' || window.location.hash === '#/live-camera';
@@ -167,6 +137,33 @@ export function App() {
     const unsubPx4Tel = px4.onTelemetry((t) => {
       if (apiService.getMode() === 'px4') {
         setCheckpointTelemetry({ ...t });
+
+        // Priority 2: Directly drive the vehicle from genuine PX4 SITL MAVLink telemetry
+        setDrones((prevDrones) => {
+          const targetId = t.droneId || 'AV-01';
+          return prevDrones.map((d) => {
+            if (d.id === targetId) {
+              return {
+                ...d,
+                vitals: {
+                  ...d.vitals,
+                  latitude: t.lat,
+                  longitude: t.lng,
+                  altitudeMeters: t.altitudeMeters,
+                  headingDegrees: t.headingDegrees,
+                  groundSpeedKmh: t.groundSpeedKmh,
+                  verticalSpeedMs: t.verticalSpeedMs || 0,
+                  batteryPercentage: t.batteryPercentage,
+                  batteryVoltage: t.batteryVoltage || 24.8,
+                  satellitesVisible: t.satellites || 18,
+                  gpsFixType: t.rtkFix || 'RTK_FIX',
+                },
+                status: t.missionStatus === 'running' ? 'en_route_pickup' : t.missionStatus === 'paused' ? 'hovering' : 'active',
+              };
+            }
+            return d;
+          });
+        });
       }
     });
 
@@ -185,19 +182,57 @@ export function App() {
     };
   }, [missionController]);
 
+  // Master Telemetry & Multi-Drone Simulation Engine (Runs continuously, NO AUDIO)
+  useEffect(() => {
+    if (!isSimRunning) return;
+
+    const tickInterval = 1000 / simulationSpeed;
+    const timer = setInterval(() => {
+      setDrones((prevDrones) => {
+        const deltaSeconds = 1;
+        const isPx4Live = apiService.getMode() === 'px4' && apiService.getPx4Adapter().isAutopilotConnected();
+        const px4ControlledIds = isPx4Live ? new Set(['AV-01']) : undefined;
+        const res = updateSimulationTick(prevDrones, deltaSeconds, geofences, obstacles, officialAirspaceZones, px4ControlledIds);
+
+        // Prepend new flight logs if emitted
+        if (res.newLogs.length > 0) {
+          setFlightLogs((prevLogs) => [...res.newLogs, ...prevLogs].slice(0, 50));
+        }
+
+        // Update airspace conflicts & 3D obstacle conflicts
+        setConflicts(res.conflicts);
+        setObstacleConflicts(res.obstacleConflicts);
+
+        // Prepend new notifications if emitted (Req 3)
+        if (res.newNotifications.length > 0) {
+          setNotifications((prevNotifs) => {
+            // Avoid duplicate notifications within 10 seconds
+            const filteredNew = res.newNotifications.filter(
+              (n) => !prevNotifs.some((p) => p.title === n.title && Math.abs(Date.now() - parseInt(p.id.split('-').pop() || '0')) < 10000)
+            );
+            return [...filteredNew, ...prevNotifs].slice(0, 100);
+          });
+        }
+
+        return res.updatedDrones;
+      });
+    }, tickInterval);
+
+    return () => clearInterval(timer);
+  }, [isSimRunning, simulationSpeed, geofences, obstacles, officialAirspaceZones]);
 
   // Selected drone helper
   const selectedDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
+  const selectedDroneConflict = obstacleConflicts.find((c) => c.droneId === selectedDrone?.id) || null;
 
   // Handler: Select Drone
   const handleSelectDrone = (id: string) => {
     setSelectedDroneId(id);
     setIsDetailPanelOpen(true);
     setSelectedWaypointId(null);
-    playRadarBeep(980);
   };
 
-  // Handler: Pause / Resume Mission
+  // Handler: Pause / Resume Mission for individual drone
   const handlePauseResume = (droneId: string) => {
     setDrones((prev) =>
       prev.map((d) => {
@@ -222,20 +257,31 @@ export function App() {
     );
   };
 
+  // Handler: Reset Simulation (Req 8.C)
+  const handleResetSimulation = () => {
+    setDrones(INITIAL_DRONES);
+    setFlightLogs(INITIAL_FLIGHT_LOGS);
+    setConflicts([]);
+    setObstacleConflicts([]);
+    setSelectedDroneId('AV-01');
+    setSelectedWaypointId(null);
+  };
+
   // Handler: Trigger Smart Route Replanning
   const handleTriggerReplan = (droneId: string) => {
     const targetDrone = drones.find((d) => d.id === droneId);
     if (!targetDrone) return;
 
-    const restrictedZone = geofences.find((g) => g.type === 'restricted');
-    const polygon = restrictedZone ? restrictedZone.coordinates : [];
-    const replan = generateSmartReplan(targetDrone, polygon);
+    const replan = generateSmartReplan(targetDrone, obstacles, officialAirspaceZones, drones);
 
     setReplanData({
       drone: targetDrone,
       proposedRoute: replan.proposedRoute,
       addedDistanceKm: replan.addedDistanceKm,
       addedDelayMinutes: replan.addedDelayMinutes,
+      originalDistanceKm: replan.originalDistanceKm,
+      alternativeDistanceKm: replan.alternativeDistanceKm,
+      comparisonTable: replan.comparisonTable,
     });
   };
 
@@ -253,7 +299,7 @@ export function App() {
               timestamp: timeStr,
               droneId: d.id,
               droneCallsign: d.callsign,
-              event: `SMART REPLAN: West clearance detour approved (+${replanData.addedDistanceKm} km, +${replanData.addedDelayMinutes} min)`,
+              event: `SMART REPLAN: Peelamedu clearance detour approved (+${replanData.addedDistanceKm} km, +${replanData.addedDelayMinutes} min)`,
               type: 'success',
             },
             ...logs,
@@ -265,6 +311,8 @@ export function App() {
             originalRoute: d.route,
             currentWaypointIndex: 0,
             status: 'delivering',
+            routeStatus: 'A_STAR_REROUTED',
+            isRerouting: true,
             isPaused: false,
           };
         }
@@ -282,9 +330,9 @@ export function App() {
         if (d.id === droneId) {
           const baseWaypoint: Waypoint = {
             id: `rtb-wp-${Date.now()}`,
-            name: 'Hub Alpha Emergency RTB Dock',
-            lat: -37.8155,
-            lng: 145.1220,
+            name: 'CMCH Hub Alpha Emergency RTB Dock',
+            lat: 11.0025,
+            lng: 76.9665,
             altitudeMeters: 0,
             type: 'base',
             status: 'upcoming',
@@ -334,7 +382,6 @@ export function App() {
     setDrones((prev) =>
       prev.map((d) => {
         if (d.id === droneId) {
-          // Trigger confetti pulse
           confetti({
             particleCount: 80,
             spread: 60,
@@ -367,19 +414,41 @@ export function App() {
     );
   };
 
-  // Handler: Acknowledge All Alerts
+  // Handlers: Notifications (Req 3)
+  const handleMarkAsRead = (id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n))
+    );
+  };
+
+  const handleMarkAllAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  };
+
+  const handleAcknowledgeNotification = (id: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, acknowledged: true, read: true } : n))
+    );
+  };
+
+  const handleAcknowledgeAllNotifications = () => {
+    setNotifications((prev) =>
+      prev.map((n) => ({ ...n, acknowledged: true, read: true }))
+    );
+  };
+
+  // Handlers: Operational Alerts
   const handleAcknowledgeAllAlerts = () => {
     setAlerts((prev) => prev.map((a) => ({ ...a, acknowledged: true })));
   };
 
-  // Handler: Acknowledge Single Alert
   const handleAcknowledgeAlert = (id: string) => {
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, acknowledged: true } : a)));
   };
 
   return (
     <div className="w-screen h-screen flex flex-col bg-[#080b12] text-slate-100 overflow-hidden select-none font-sans">
-      {/* Top Navigation Bar */}
+      {/* Top Navigation Bar (NO AUDIO BUTTON) */}
       <Header
         activeTab={activeTab}
         setActiveTab={(tab) => {
@@ -390,38 +459,42 @@ export function App() {
           }
         }}
         alerts={alerts}
-        isMuted={isMuted}
-        setIsMuted={setIsMuted}
+        notifications={notifications}
+        isNotificationPanelOpen={isNotificationPanelOpen}
+        setIsNotificationPanelOpen={setIsNotificationPanelOpen}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenReplay={() => setIsReplayModalOpen(true)}
         onOpenApiContract={() => setIsApiContractOpen(true)}
+        onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
       />
 
       {/* PX4 SITL & Gazebo Autopilot Integration Status Banner */}
-      <Px4SitlStatusBanner onOpenSetupGuide={() => setIsPx4SetupOpen(true)}
-      />
+      <Px4SitlStatusBanner onOpenSetupGuide={() => setIsPx4SetupOpen(true)} />
 
-      {/* Main Command Workspace */}
+      {/* Main Command Center Workspace */}
       <main className="flex-1 flex overflow-hidden relative">
-        {/* TAB 1: LIVE OPERATIONS (Matches reference layout: Fleet Sidebar + Central Map + Detail / Overview + Right Alerts) */}
+        {/* TAB 1: LIVE OPERATIONS (3-Column Desktop Grid Layout) */}
         {activeTab === 'live' && (
-          <div className="flex-1 flex w-full h-full overflow-hidden">
-            {/* Left Sidebar: Fleet Monitor */}
-            <FleetSidebar
-              drones={drones}
-              selectedDroneId={selectedDroneId}
-              onSelectDrone={handleSelectDrone}
-              filter={filter}
-              setFilter={setFilter}
-              searchQuery={searchQuery}
-              setSearchQuery={setSearchQuery}
-              activeAlertsCount={alerts.filter((a) => !a.acknowledged).length}
-            />
+          <div className="flex-1 grid grid-cols-[310px_1fr_340px] xl:grid-cols-[340px_1fr_380px] 2xl:grid-cols-[370px_1fr_420px] w-full h-full overflow-hidden min-h-0 min-w-0">
+            {/* Column 1: Left Sidebar (Aircraft & Fleet Directory) */}
+            <div className="h-full overflow-hidden min-w-0 flex flex-col">
+              <FleetSidebar
+                drones={drones}
+                selectedDroneId={selectedDroneId}
+                onSelectDrone={handleSelectDrone}
+                filter={filter}
+                setFilter={setFilter}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                activeAlertsCount={alerts.filter((a) => !a.acknowledged).length}
+                obstacleConflicts={obstacleConflicts}
+              />
+            </div>
 
-            {/* Central Workspace: Map / POV + Bottom Panels */}
-            <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
-              {/* Primary Viewport: Geospatial Map or Synthetic POV Camera */}
-              <div className="flex-1 relative w-full h-full min-h-0">
+            {/* Column 2: Central Geospatial Workspace & Telemetry HUD */}
+            <div className="h-full overflow-hidden min-w-0 flex flex-col border-r border-[#1f2a40]">
+              {/* Primary Viewport: 2D/3D Geospatial Map or Synthetic POV Camera */}
+              <div className="flex-1 relative w-full h-full min-h-0 overflow-hidden">
                 {viewMode === 'pov' && selectedDrone ? (
                   <DronePOVCamera
                     drone={selectedDrone}
@@ -433,11 +506,20 @@ export function App() {
                     selectedDroneId={selectedDroneId}
                     onSelectDrone={handleSelectDrone}
                     geofences={geofences}
+                    officialAirspaceZones={officialAirspaceZones}
+                    obstacles={obstacles}
+                    obstacleConflicts={obstacleConflicts}
                     viewMode={viewMode}
                     setViewMode={setViewMode}
                     proposedRoute={replanData ? replanData.proposedRoute : null}
                     selectedWaypointId={selectedWaypointId}
                     onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
+                    isSimRunning={isSimRunning}
+                    onToggleSim={() => setIsSimRunning(!isSimRunning)}
+                    simSpeed={simulationSpeed}
+                    onChangeSimSpeed={setSimulationSpeed}
+                    onResetSim={handleResetSimulation}
+                    onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
                     checkpointMission={checkpointMission}
                     checkpointTelemetry={checkpointTelemetry}
                   />
@@ -445,10 +527,22 @@ export function App() {
               </div>
 
               {/* Bottom Multi-Panel Container */}
-              <div className="flex flex-col shrink-0 border-t border-[#1e2a40] bg-[#0c101a]">
+              <div className="flex flex-col shrink-0 border-t border-[#1f2a40] bg-[#0c101a]">
                 {/* Panel Selector Strip */}
                 <div className="flex items-center justify-between px-3 py-1 bg-[#090d17] border-b border-[#1b2538] text-xs">
-                  <div className="flex items-center gap-1 font-sans">
+                  <div className="flex items-center gap-1 font-mono">
+                    <button
+                      onClick={() => setBottomTabMode('detail')}
+                      className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
+                        bottomTabMode === 'detail'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <Navigation className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Aircraft Vitals &amp; Route HUD</span>
+                    </button>
+
                     <button
                       onClick={() => setBottomTabMode('checkpoint')}
                       className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -459,17 +553,6 @@ export function App() {
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
                       <span>Checkpoint Showcase</span>
-                    </button>
-
-                    <button
-                      onClick={() => setBottomTabMode('detail')}
-                      className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                        bottomTabMode === 'detail'
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                      }`}
-                    >
-                      <span>Drone Vitals</span>
                     </button>
 
                     <button
@@ -484,7 +567,7 @@ export function App() {
                     </button>
                   </div>
 
-                  <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono text-slate-500">
+                  <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono text-slate-400">
                     <span>Active Telemetry: {checkpointTelemetry?.groundSpeedKmh || 0} km/h</span>
                     <span>•</span>
                     <span>Alt: {Math.round(checkpointTelemetry?.altitudeMeters || 0)}m</span>
@@ -492,17 +575,10 @@ export function App() {
                 </div>
 
                 {/* Selected Panel Content */}
-                {bottomTabMode === 'checkpoint' && (
-                  <CheckpointMissionPanel
-                    onOpenApiContract={() => setIsApiContractOpen(true)}
-                    onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
-                  />
-                )}
-
                 {bottomTabMode === 'detail' && selectedDrone && (
                   <DroneDetailPanel
                     drone={selectedDrone}
-                    onClose={() => setBottomTabMode('checkpoint')}
+                    onClose={() => setBottomTabMode('logs')}
                     onPauseResume={handlePauseResume}
                     onTriggerReplan={handleTriggerReplan}
                     onTriggerRTB={handleTriggerRTB}
@@ -510,6 +586,14 @@ export function App() {
                     onSwitchToPOV={() => setViewMode('pov')}
                     onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
                     selectedWaypointId={selectedWaypointId}
+                    activeConflict={selectedDroneConflict}
+                  />
+                )}
+
+                {bottomTabMode === 'checkpoint' && (
+                  <CheckpointMissionPanel
+                    onOpenApiContract={() => setIsApiContractOpen(true)}
+                    onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
                   />
                 )}
 
@@ -523,14 +607,17 @@ export function App() {
               </div>
             </div>
 
-            {/* Right Sidebar: Alerts, Airspace Conflict Radar & Mission Status */}
-            <RightSidebar
-              alerts={alerts}
-              conflicts={conflicts}
-              onAcknowledgeAll={handleAcknowledgeAllAlerts}
-              onAcknowledgeAlert={handleAcknowledgeAlert}
-              onSelectDrone={handleSelectDrone}
-            />
+            {/* Column 3: Right Sidebar (Operational Alerts & Separation Monitoring) */}
+            <div className="h-full overflow-hidden min-w-0 flex flex-col">
+              <RightSidebar
+                alerts={alerts}
+                conflicts={conflicts}
+                obstacleConflicts={obstacleConflicts}
+                onAcknowledgeAll={handleAcknowledgeAllAlerts}
+                onAcknowledgeAlert={handleAcknowledgeAlert}
+                onSelectDrone={handleSelectDrone}
+              />
+            </div>
           </div>
         )}
 
@@ -560,7 +647,9 @@ export function App() {
         {activeTab === 'airspace' && (
           <AirspaceView
             geofences={geofences}
+            officialAirspaceZones={officialAirspaceZones}
             conflicts={conflicts}
+            onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
             onSwitchToLive={() => {
               setViewMode('3d');
               setActiveTab('live');
@@ -582,6 +671,18 @@ export function App() {
         )}
       </main>
 
+      {/* SLIDE-OVER: Operational Notifications Panel (Req 3) */}
+      <NotificationPanel
+        isOpen={isNotificationPanelOpen}
+        onClose={() => setIsNotificationPanelOpen(false)}
+        notifications={notifications}
+        onMarkAsRead={handleMarkAsRead}
+        onMarkAllAsRead={handleMarkAllAsRead}
+        onAcknowledge={handleAcknowledgeNotification}
+        onAcknowledgeAll={handleAcknowledgeAllNotifications}
+        onSelectDrone={handleSelectDrone}
+      />
+
       {/* MODAL 1: Smart Route Replanning Modal */}
       {replanData && (
         <RouteReplanModal
@@ -589,6 +690,9 @@ export function App() {
           proposedRoute={replanData.proposedRoute}
           addedDistanceKm={replanData.addedDistanceKm}
           addedDelayMinutes={replanData.addedDelayMinutes}
+          originalDistanceKm={replanData.originalDistanceKm}
+          alternativeDistanceKm={replanData.alternativeDistanceKm}
+          comparisonTable={replanData.comparisonTable}
           onAccept={handleAcceptReplan}
           onReject={() => setReplanData(null)}
         />
@@ -608,12 +712,12 @@ export function App() {
           onClose={() => setIsSettingsModalOpen(false)}
           simulationSpeed={simulationSpeed}
           setSimulationSpeed={setSimulationSpeed}
-          isMuted={isMuted}
-          setIsMuted={setIsMuted}
           safetyReservePercent={safetyReservePercent}
           setSafetyReservePercent={setSafetyReservePercent}
           separationDistanceMeters={separationDistanceMeters}
           setSeparationDistanceMeters={setSeparationDistanceMeters}
+          obstacleWarningRadiusMeters={obstacleWarningRadiusMeters}
+          setObstacleWarningRadiusMeters={setObstacleWarningRadiusMeters}
         />
       )}
 

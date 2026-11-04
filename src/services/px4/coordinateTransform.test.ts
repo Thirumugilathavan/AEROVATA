@@ -5,8 +5,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Px4GazeboCoordinateAdapter, defaultCoordinateAdapter } from './coordinateTransform.ts';
-import type { Checkpoint } from '../../types/mission.ts';
+import { Px4GazeboCoordinateAdapter, defaultCoordinateAdapter } from './coordinateTransform';
+import type { Checkpoint } from '../../types/mission';
 
 test('wgs84ToLocalNed computes zero displacement at home datum', () => {
   const home = { lat: -37.8155, lng: 145.1220, altitudeMeters: 45.0 };
@@ -23,10 +23,9 @@ test('wgs84ToLocalNed correctly computes North and Down displacements', () => {
   const target = { lat: -37.8145, lng: 145.1220, altitudeMeters: 50.0 };
   const ned = defaultCoordinateAdapter.wgs84ToLocalNed(target, home);
 
-  // 0.001 deg of latitude is approx 111 meters
   assert.ok(ned.northMeters > 110.0 && ned.northMeters < 112.0);
   assert.strictEqual(Math.round(ned.eastMeters), 0);
-  assert.strictEqual(ned.downMeters, -50.0); // Down is negative when flying higher
+  assert.strictEqual(ned.downMeters, -50.0);
 });
 
 test('Round-trip coordinate conversion WGS84 -> NED -> WGS84 preserves accuracy', () => {

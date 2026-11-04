@@ -11,7 +11,7 @@
  * Map Provider Independent: Enables hot-swapping MapLibre, Cesium, Leaflet, or custom engines.
  */
 
-import type { Checkpoint } from '../../types/mission.ts';
+import type { Checkpoint } from '../../types/mission';
 
 export interface Wgs84Coordinate {
   lat: number;
@@ -91,7 +91,6 @@ export class Px4GazeboCoordinateAdapter implements IMapCoordinateAdapter {
    * Uses flat-earth equirectangular projection with geodetic curvature correction.
    */
   public wgs84ToLocalNed(coord: Wgs84Coordinate, home: Wgs84Coordinate): LocalNedCoordinate {
-    const latRad = (coord.lat * Math.PI) / 180.0;
     const homeLatRad = (home.lat * Math.PI) / 180.0;
     const dLat = ((coord.lat - home.lat) * Math.PI) / 180.0;
     const dLon = ((coord.lng - home.lng) * Math.PI) / 180.0;

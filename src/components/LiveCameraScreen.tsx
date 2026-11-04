@@ -29,8 +29,8 @@ import {
   ShieldAlert,
   ArrowLeft
 } from 'lucide-react';
-import type { Mission, MissionTelemetry, CameraConnectionStatus } from '../types/mission.ts';
-import { apiService } from '../services/api/index.ts';
+import type { Mission, MissionTelemetry, CameraConnectionStatus } from '../types/mission';
+import { apiService } from '../services/api/index';
 
 interface LiveCameraScreenProps {
   onBackToMap?: () => void;

@@ -6,8 +6,8 @@
  * Prevents invalid operational states.
  */
 
-import type { MissionState } from '../types/mission.ts';
-import type { StateTransitionEvent } from './types.ts';
+import type { MissionState } from '../types/mission';
+import type { StateTransitionEvent } from './types';
 
 export class MissionStateMachine {
   private currentState: MissionState = 'idle';
@@ -100,14 +100,14 @@ export class MissionStateMachine {
     }
   }
 
+  public getHistory(): StateTransitionEvent[] {
+    return [...this.transitionHistory];
+  }
+
   public onTransition(listener: (event: StateTransitionEvent) => void): () => void {
     this.listeners.push(listener);
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
     };
-  }
-
-  public getHistory(): readonly StateTransitionEvent[] {
-    return this.transitionHistory;
   }
 }

@@ -1,43 +1,65 @@
 """
-PX4 SITL & Gazebo MAVLink Gateway Service
+PX4 SITL & Gazebo MAVLink Gateway Service & Unified FastAPI Backend
 AEROVATA by TASPORA - Autonomous Drone Delivery Command Center
 
-Connects directly to PX4 Autopilot Software-in-the-Loop (SITL) running in Gazebo
-over MAVLink (UDP: 14550 / 14540). Bridges autopilot telemetry and missions
-to the TASPORA web application over WebSocket and REST.
-
-For simulation and software demonstration only. Isolated from physical aircraft.
+Unified Backend Service serving:
+1. REST API (http://localhost:8000/api/v1) for missions, vehicles, telemetry, health, and simulation controls.
+2. Real-time WebSocket (ws://localhost:8000/api/v1/ws/telemetry and /ws/telemetry) streaming 10Hz telemetry.
+3. Configurable MAVLink Bridge receiving telemetry from PX4 Autopilot SITL over UDP (default 14550 / 14540).
+4. Realistic MAVLink heartbeat state machine & multi-vehicle tracking.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import enum
 import json
 import logging
 import math
+import os
 import queue
 import socket
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 try:
-    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body, Query, status
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
     import uvicorn
     from pymavlink import mavutil
+    from pymavlink.dialects.v20 import common as mavlink2
 except ImportError as e:
     sys.stderr.write(f"Missing dependency: {e}\nRun: pip install pymavlink fastapi uvicorn websockets\n")
     sys.exit(1)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("px4_gateway")
 
+# ─── ENUMS & CONSTANTS ───────────────────────────────────────────────────────
+
+class Px4ConnectionState(str, enum.Enum):
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    STARTING_SIMULATOR = "STARTING_SIMULATOR"
+    WAITING_FOR_GAZEBO = "WAITING_FOR_GAZEBO"
+    WAITING_FOR_PX4 = "WAITING_FOR_PX4"
+    WAITING_FOR_MAVLINK_HEARTBEAT = "WAITING_FOR_MAVLINK_HEARTBEAT"
+    CONNECTED = "CONNECTED"
+    TELEMETRY_STALE = "TELEMETRY_STALE"
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTION_ERROR = "CONNECTION_ERROR"
+
+DEFAULT_HTTP_PORT = int(os.environ.get("PORT", os.environ.get("HTTP_PORT", "8000")))
+DEFAULT_MAVLINK_PORT = os.environ.get("MAVLINK_PORT", "udpin:0.0.0.0:14550")
+DEFAULT_HEARTBEAT_TIMEOUT = 3.5  # Seconds before marking telemetry STALE
+DEFAULT_DISCONNECT_TIMEOUT = 7.0 # Seconds before marking vehicle DISCONNECTED
+
 app = FastAPI(
-    title="AEROVATA PX4 SITL Gateway",
-    description="MAVLink-to-WebSocket bridge connecting TASPORA to PX4 SITL & Gazebo",
+    title="AEROVATA Drone Command Center Backend & PX4 SITL Gateway",
+    description="Unified REST & WebSocket Backend for TASPORA Autonomous Drone Delivery & PX4 Autopilot SITL",
     version="1.0.0",
 )
 
@@ -49,26 +71,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── PX4 TELEMETRY & STATE CONTAINER ─────────────────────────────────────────
+# ─── VEHICLE STATE CONTAINER ────────────────────────────────────────────────
 
-class Px4State:
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
+class VehicleState:
+    def __init__(self, system_id: int = 1, component_id: int = 1, callsign: str = "AV-01") -> None:
+        self.lock = threading.RLock()
+        self.system_id: int = system_id
+        self.component_id: int = component_id
+        self.callsign: str = callsign
         self.connected: bool = False
         self.last_heartbeat_time: float = 0.0
-        self.system_id: int = 1
-        self.component_id: int = 1
-        self.autopilot_type: str = "UNKNOWN"
-        self.vehicle_type: str = "UNKNOWN"
+        self.last_telemetry_time: float = 0.0
+        self.autopilot_type: str = "PX4 Autopilot (SITL)"
+        self.vehicle_type: str = "x500 Quadrotor"
         self.armed: bool = False
         self.flight_mode: str = "DISCONNECTED"
+        self.landed_state: str = "ON_GROUND"
 
-        # Position and Kinematics
-        self.latitude: float = -37.8155
-        self.longitude: float = 145.1220
-        self.altitude_msl_m: float = 0.0
+        # Position and Kinematics (Default Coimbatore Hub)
+        self.latitude: float = 11.02580
+        self.longitude: float = 77.01155
+        self.altitude_msl_m: float = 432.0
         self.relative_altitude_m: float = 0.0
-        self.heading_degrees: float = 0.0
+        self.heading_degrees: float = 45.0
         self.groundspeed_kmh: float = 0.0
         self.vertical_speed_ms: float = 0.0
         self.roll_deg: float = 0.0
@@ -78,6 +103,7 @@ class Px4State:
         # Health & Battery
         self.battery_percentage: float = 100.0
         self.battery_voltage_v: float = 24.8
+        self.battery_current_a: float = 0.0
         self.satellites_visible: int = 18
         self.gps_fix_type: str = "RTK_FIX"
 
@@ -89,22 +115,27 @@ class Px4State:
         self.last_status_text: str = ""
 
     def update_heartbeat(self, msg: Any) -> None:
-        # Ignore GCS echoes (system ID 255 or GCS type)
-        if msg.get_srcSystem() == 255 or msg.type == mavutil.mavlink.MAV_TYPE_GCS:
-            return
-
         with self.lock:
             self.connected = True
-            self.last_heartbeat_time = time.time()
-            self.system_id = msg.get_srcSystem()
-            self.component_id = msg.get_srcComponent()
+            now = time.time()
+            self.last_heartbeat_time = now
+            self.last_telemetry_time = now
             self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-            self.autopilot_type = "PX4 Autopilot (SITL)" if msg.autopilot == mavutil.mavlink.MAV_AUTOPILOT_PX4 else f"Autopilot({msg.autopilot})"
-            self.vehicle_type = "x500 Quadrotor" if msg.type == mavutil.mavlink.MAV_TYPE_QUADROTOR else f"Type({msg.type})"
+            if msg.autopilot == mavutil.mavlink.MAV_AUTOPILOT_PX4:
+                self.autopilot_type = "PX4 Autopilot (SITL)"
+            else:
+                self.autopilot_type = f"Autopilot({msg.autopilot})"
+
+            if msg.type == mavutil.mavlink.MAV_TYPE_QUADROTOR:
+                self.vehicle_type = "x500 Quadrotor"
+            elif msg.type == mavutil.mavlink.MAV_TYPE_HEXAROTOR:
+                self.vehicle_type = "x650 Hexacopter"
+            else:
+                self.vehicle_type = f"MAV_TYPE({msg.type})"
+
             self.flight_mode = self._decode_px4_mode(msg.custom_mode)
 
     def _decode_px4_mode(self, custom_mode: int) -> str:
-        # PX4 custom mode bitmask: main_mode in bits 16-23, sub_mode in bits 24-31
         main_mode = (custom_mode >> 16) & 0xFF
         sub_mode = (custom_mode >> 24) & 0xFF
         modes = {
@@ -129,21 +160,31 @@ class Px4State:
         res = modes.get(main_mode, "UNKNOWN")
         if isinstance(res, dict):
             return res.get(sub_mode, f"AUTO({sub_mode})")
-        return res
+        return str(res)
 
-    def check_connection_timeout(self) -> None:
+    def check_staleness(self) -> str:
         with self.lock:
-            if self.connected and (time.time() - self.last_heartbeat_time > 3.5):
+            if not self.connected:
+                return "UNAVAILABLE"
+            age = time.time() - self.last_heartbeat_time
+            if age > DEFAULT_DISCONNECT_TIMEOUT:
                 self.connected = False
                 self.flight_mode = "DISCONNECTED"
-                logger.warning("PX4 heartbeat timeout. Vehicle marked DISCONNECTED.")
+                return "UNAVAILABLE"
+            elif age > DEFAULT_HEARTBEAT_TIMEOUT:
+                return "STALE"
+            return "LIVE"
 
-    def to_telemetry_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         with self.lock:
+            status_str = self.check_staleness()
             return {
-                "droneId": "AV-PX4-SITL",
+                "droneId": self.callsign,
+                "systemId": self.system_id,
+                "componentId": self.component_id,
                 "timestamp": int(time.time() * 1000),
                 "connected": self.connected,
+                "telemetryStatus": status_str,
                 "armed": self.armed,
                 "flightMode": self.flight_mode,
                 "autopilot": self.autopilot_type,
@@ -160,6 +201,7 @@ class Px4State:
                 "yawDeg": round(self.yaw_deg, 1),
                 "batteryPercentage": round(self.battery_percentage, 1),
                 "batteryVoltage": round(self.battery_voltage_v, 1),
+                "batteryCurrent": round(self.battery_current_a, 1),
                 "signalQualityPercent": 99 if self.connected else 0,
                 "rtkFix": self.gps_fix_type if self.connected else "SEARCHING",
                 "satellites": self.satellites_visible if self.connected else 0,
@@ -167,11 +209,193 @@ class Px4State:
                 "missionStatus": self.mission_state if self.connected else "error",
                 "isDwellActive": self.is_dwell_active,
                 "lastStatusText": self.last_status_text,
+                "heartbeatAgeSec": round(time.time() - self.last_heartbeat_time, 2) if self.last_heartbeat_time > 0 else None,
             }
 
-px4_state = Px4State()
+# ─── GLOBAL FLEET & GATEWAY MANAGER ──────────────────────────────────────────
 
-# ─── MAVLINK CONNECTION & BACKGROUND THREAD ──────────────────────────────────
+class GatewayManager:
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.vehicles: Dict[int, VehicleState] = {
+            1: VehicleState(1, 1, "AV-01"),
+            2: VehicleState(2, 1, "AV-02"),
+            3: VehicleState(3, 1, "AV-03"),
+            4: VehicleState(4, 1, "AV-04"),
+        }
+        self.primary_sysid: int = 1
+        self.connection_state: Px4ConnectionState = Px4ConnectionState.NOT_CONFIGURED
+        self.connection_reason: str = "Initialized. Awaiting MAVLink socket binding."
+        self.connection_str: str = DEFAULT_MAVLINK_PORT
+        self.http_port: int = DEFAULT_HTTP_PORT
+        self.simulation_mode: str = "px4"  # 'px4' or 'mock'
+        self.mavlink_socket_bound: bool = False
+        self.active_missions: Dict[str, Dict[str, Any]] = self._init_preset_missions()
+        self.harness_active: bool = False
+        self.harness_thread: Optional[threading.Thread] = None
+
+    def _init_preset_missions(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            "MSN-CBE-01": {
+                "id": "MSN-CBE-01",
+                "name": "Coimbatore CMCH Trauma Center Rapid Blood Corridor",
+                "droneId": "AV-01",
+                "droneCallsign": "DRONE 01 (AV-01)",
+                "status": "idle",
+                "currentCheckpointIndex": 0,
+                "checkpoints": [
+                    {
+                        "id": "cp-cbe-01",
+                        "sequence": 0,
+                        "name": "Peelamedu Transit Depot (Origin Pad)",
+                        "lat": 11.02580,
+                        "lng": 77.01155,
+                        "altitudeMeters": 0,
+                        "targetSpeedKmh": 35,
+                        "arrivalRadiusMeters": 6,
+                        "dwellTimeSeconds": 0,
+                        "action": "takeoff",
+                        "status": "reached"
+                    },
+                    {
+                        "id": "cp-cbe-02",
+                        "sequence": 1,
+                        "name": "Nava India Sky Corridor",
+                        "lat": 11.02050,
+                        "lng": 76.99400,
+                        "altitudeMeters": 65,
+                        "targetSpeedKmh": 48,
+                        "arrivalRadiusMeters": 8,
+                        "dwellTimeSeconds": 0,
+                        "action": "transit",
+                        "status": "active"
+                    },
+                    {
+                        "id": "cp-cbe-03",
+                        "sequence": 2,
+                        "name": "Lakshmi Mills Overfly Corridor",
+                        "lat": 11.01520,
+                        "lng": 76.98100,
+                        "altitudeMeters": 65,
+                        "targetSpeedKmh": 45,
+                        "arrivalRadiusMeters": 8,
+                        "dwellTimeSeconds": 2,
+                        "action": "hover_inspect",
+                        "status": "pending"
+                    },
+                    {
+                        "id": "cp-cbe-04",
+                        "sequence": 3,
+                        "name": "GKNM Hospital Helipad Approach",
+                        "lat": 11.01280,
+                        "lng": 76.97450,
+                        "altitudeMeters": 45,
+                        "targetSpeedKmh": 30,
+                        "arrivalRadiusMeters": 6,
+                        "dwellTimeSeconds": 0,
+                        "action": "transit",
+                        "status": "pending"
+                    },
+                    {
+                        "id": "cp-cbe-05",
+                        "sequence": 4,
+                        "name": "CMCH Master Trauma Helipad (Destination)",
+                        "lat": 11.00280,
+                        "lng": 76.96580,
+                        "altitudeMeters": 0,
+                        "targetSpeedKmh": 20,
+                        "arrivalRadiusMeters": 5,
+                        "dwellTimeSeconds": 0,
+                        "action": "land",
+                        "status": "pending"
+                    }
+                ]
+            },
+            "MSN-CBE-02": {
+                "id": "MSN-CBE-02",
+                "name": "TIDEL Park IT SEZ STAT Medical Cargo Corridor",
+                "droneId": "AV-02",
+                "droneCallsign": "DRONE 02 (AV-02)",
+                "status": "idle",
+                "currentCheckpointIndex": 0,
+                "checkpoints": [
+                    {
+                        "id": "cp-tp-01",
+                        "sequence": 0,
+                        "name": "Gandhipuram Central Diagnostic Hub Pad",
+                        "lat": 11.01808,
+                        "lng": 76.96844,
+                        "altitudeMeters": 0,
+                        "targetSpeedKmh": 30,
+                        "arrivalRadiusMeters": 5,
+                        "dwellTimeSeconds": 0,
+                        "action": "takeoff",
+                        "status": "reached"
+                    },
+                    {
+                        "id": "cp-tp-02",
+                        "sequence": 1,
+                        "name": "Avarampalayam High Viaduct Clearance",
+                        "lat": 11.02650,
+                        "lng": 76.98200,
+                        "altitudeMeters": 60,
+                        "targetSpeedKmh": 45,
+                        "arrivalRadiusMeters": 8,
+                        "dwellTimeSeconds": 0,
+                        "action": "transit",
+                        "status": "pending"
+                    },
+                    {
+                        "id": "cp-tp-03",
+                        "sequence": 2,
+                        "name": "TIDEL Park IT SEZ Med-Dock Helipad",
+                        "lat": 11.02980,
+                        "lng": 77.02550,
+                        "altitudeMeters": 0,
+                        "targetSpeedKmh": 25,
+                        "arrivalRadiusMeters": 5,
+                        "dwellTimeSeconds": 0,
+                        "action": "land",
+                        "status": "pending"
+                    }
+                ]
+            }
+        }
+
+    def get_vehicle(self, sysid: int) -> VehicleState:
+        with self.lock:
+            if sysid not in self.vehicles:
+                self.vehicles[sysid] = VehicleState(sysid, 1, f"AV-0{sysid}" if sysid <= 9 else f"AV-{sysid}")
+            return self.vehicles[sysid]
+
+    def get_primary_vehicle(self) -> VehicleState:
+        return self.get_vehicle(self.primary_sysid)
+
+    def update_connection_state(self) -> None:
+        with self.lock:
+            pv = self.vehicles.get(self.primary_sysid)
+            if not self.mavlink_socket_bound:
+                self.connection_state = Px4ConnectionState.CONNECTION_ERROR
+                return
+
+            if pv and pv.connected:
+                age = time.time() - pv.last_heartbeat_time
+                if age > DEFAULT_DISCONNECT_TIMEOUT:
+                    self.connection_state = Px4ConnectionState.DISCONNECTED
+                    self.connection_reason = f"PX4 heartbeat timeout ({age:.1f}s > {DEFAULT_DISCONNECT_TIMEOUT}s). Autopilot disconnected."
+                elif age > DEFAULT_HEARTBEAT_TIMEOUT:
+                    self.connection_state = Px4ConnectionState.TELEMETRY_STALE
+                    self.connection_reason = f"PX4 telemetry is stale (last heartbeat {age:.1f}s ago)."
+                else:
+                    self.connection_state = Px4ConnectionState.CONNECTED
+                    self.connection_reason = f"PX4 Autopilot SITL is live and transmitting MAVLink heartbeats on {self.connection_str} (SysID: {pv.system_id})."
+            else:
+                self.connection_state = Px4ConnectionState.WAITING_FOR_MAVLINK_HEARTBEAT
+                self.connection_reason = f"MAVLink socket bound on {self.connection_str}. Awaiting MAVLink HEARTBEAT from PX4 SITL / Gazebo."
+
+gateway_mgr = GatewayManager()
+
+# ─── ROBUST MAVLINK BRIDGE ───────────────────────────────────────────────────
 
 class MavlinkBridge:
     def __init__(self, connection_str: str) -> None:
@@ -179,14 +403,13 @@ class MavlinkBridge:
         self.mav: Optional[mavutil.mavfile] = None
         self.running: bool = False
         self.thread: Optional[threading.Thread] = None
-        self.active_checkpoints: List[Dict[str, Any]] = []
         self.mission_msg_queue: queue.Queue = queue.Queue()
 
     def start(self) -> None:
         self.running = True
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread = threading.Thread(target=self._run, daemon=True, name="MavlinkBridgeThread")
         self.thread.start()
-        logger.info(f"MAVLink bridge started, listening on {self.connection_str}")
+        logger.info(f"MAVLink bridge thread started with target: {self.connection_str}")
 
     def stop(self) -> None:
         self.running = False
@@ -199,13 +422,19 @@ class MavlinkBridge:
     def _connect(self) -> None:
         while self.running:
             try:
-                logger.info(f"Binding MAVLink socket on {self.connection_str}...")
+                logger.info(f"Attempting to bind MAVLink socket on {self.connection_str}...")
                 self.mav = mavutil.mavlink_connection(self.connection_str, autoreconnect=True)
-                logger.info("MAVLink socket bound. Awaiting heartbeat from PX4 SITL...")
+                gateway_mgr.mavlink_socket_bound = True
+                gateway_mgr.connection_str = self.connection_str
+                gateway_mgr.update_connection_state()
+                logger.info(f"MAVLink socket successfully bound on {self.connection_str}!")
                 return
             except Exception as e:
-                logger.error(f"Failed to bind MAVLink connection: {e}. Retrying in 2s...")
-                time.sleep(2.0)
+                gateway_mgr.mavlink_socket_bound = False
+                gateway_mgr.connection_state = Px4ConnectionState.CONNECTION_ERROR
+                gateway_mgr.connection_reason = f"Failed to bind MAVLink socket ({self.connection_str}): {e}. Check if port is in use."
+                logger.error(f"Failed to bind MAVLink socket: {e}. Retrying in 2.5s...")
+                time.sleep(2.5)
 
     def _run(self) -> None:
         self._connect()
@@ -216,58 +445,88 @@ class MavlinkBridge:
 
             try:
                 msg = self.mav.recv_match(blocking=True, timeout=1.0)
-                px4_state.check_connection_timeout()
+                gateway_mgr.update_connection_state()
 
                 if not msg:
                     continue
 
                 msg_type = msg.get_type()
+                sys_id = msg.get_srcSystem()
+
+                # Ignore GCS echoes (SysID 255)
+                if sys_id == 255:
+                    continue
+
+                vehicle = gateway_mgr.get_vehicle(sys_id)
 
                 if msg_type == "HEARTBEAT":
-                    px4_state.update_heartbeat(msg)
+                    vehicle.update_heartbeat(msg)
+                    gateway_mgr.update_connection_state()
 
                 elif msg_type == "GLOBAL_POSITION_INT":
-                    with px4_state.lock:
-                        px4_state.latitude = msg.lat / 1e7
-                        px4_state.longitude = msg.lon / 1e7
-                        px4_state.altitude_msl_m = msg.alt / 1000.0
-                        px4_state.relative_altitude_m = max(0.0, msg.relative_alt / 1000.0)
-                        px4_state.heading_degrees = (msg.hdg / 100.0) if msg.hdg != 65535 else px4_state.heading_degrees
-                        # Velocity components in cm/s -> km/h
-                        v_horiz = math.sqrt(msg.vx * msg.vx + msg.vy * msg.vy) / 100.0 # m/s
-                        px4_state.groundspeed_kmh = v_horiz * 3.6
-                        px4_state.vertical_speed_ms = -msg.vz / 100.0
+                    with vehicle.lock:
+                        vehicle.latitude = msg.lat / 1e7
+                        vehicle.longitude = msg.lon / 1e7
+                        vehicle.altitude_msl_m = msg.alt / 1000.0
+                        vehicle.relative_altitude_m = max(0.0, msg.relative_alt / 1000.0)
+                        if msg.hdg != 65535:
+                            vehicle.heading_degrees = msg.hdg / 100.0
+                        v_horiz = math.sqrt(msg.vx * msg.vx + msg.vy * msg.vy) / 100.0
+                        vehicle.groundspeed_kmh = v_horiz * 3.6
+                        vehicle.vertical_speed_ms = -msg.vz / 100.0
+                        vehicle.last_telemetry_time = time.time()
 
                 elif msg_type == "ATTITUDE":
-                    with px4_state.lock:
-                        px4_state.roll_deg = math.degrees(msg.roll)
-                        px4_state.pitch_deg = math.degrees(msg.pitch)
-                        px4_state.yaw_deg = math.degrees(msg.yaw)
+                    with vehicle.lock:
+                        vehicle.roll_deg = math.degrees(msg.roll)
+                        vehicle.pitch_deg = math.degrees(msg.pitch)
+                        vehicle.yaw_deg = math.degrees(msg.yaw)
+
+                elif msg_type == "VFR_HUD":
+                    with vehicle.lock:
+                        if msg.heading >= 0:
+                            vehicle.heading_degrees = float(msg.heading)
+                        if msg.groundspeed >= 0:
+                            vehicle.groundspeed_kmh = float(msg.groundspeed) * 3.6
+                        vehicle.vertical_speed_ms = float(msg.climb)
+
+                elif msg_type == "GPS_RAW_INT":
+                    with vehicle.lock:
+                        vehicle.satellites_visible = msg.satellites_visible
+                        fix_names = {0: "NO_GPS", 1: "NO_FIX", 2: "2D_FIX", 3: "3D_FIX", 4: "DGPS", 5: "RTK_FLOAT", 6: "RTK_FIX"}
+                        vehicle.gps_fix_type = fix_names.get(msg.fix_type, f"FIX_{msg.fix_type}")
 
                 elif msg_type == "SYS_STATUS":
-                    with px4_state.lock:
+                    with vehicle.lock:
                         if msg.battery_remaining != -1:
-                            px4_state.battery_percentage = float(msg.battery_remaining)
+                            vehicle.battery_percentage = float(msg.battery_remaining)
                         if msg.voltage_battery != 65535:
-                            px4_state.battery_voltage_v = msg.voltage_battery / 1000.0
+                            vehicle.battery_voltage_v = msg.voltage_battery / 1000.0
+                        if msg.current_battery != -1:
+                            vehicle.battery_current_a = msg.current_battery / 100.0
+
+                elif msg_type == "EXTENDED_SYS_STATE":
+                    landed_names = {0: "UNDEFINED", 1: "ON_GROUND", 2: "IN_AIR", 3: "TAKEOFF", 4: "LANDING"}
+                    with vehicle.lock:
+                        vehicle.landed_state = landed_names.get(msg.landed_state, "UNKNOWN")
 
                 elif msg_type == "MISSION_CURRENT":
-                    with px4_state.lock:
-                        px4_state.current_waypoint_seq = msg.seq
+                    with vehicle.lock:
+                        vehicle.current_waypoint_seq = msg.seq
 
                 elif msg_type == "MISSION_ITEM_REACHED":
-                    with px4_state.lock:
-                        logger.info(f"PX4 reached checkpoint sequence #{msg.seq}")
-                        if msg.seq >= px4_state.mission_count - 1 and px4_state.mission_count > 0:
-                            px4_state.mission_state = "completed"
+                    with vehicle.lock:
+                        logger.info(f"Vehicle SysID {sys_id} reached checkpoint sequence #{msg.seq}")
+                        if msg.seq >= vehicle.mission_count - 1 and vehicle.mission_count > 0:
+                            vehicle.mission_state = "completed"
 
                 elif msg_type == "STATUSTEXT":
                     text = msg.text
                     if isinstance(text, bytes):
                         text = text.decode("utf-8", errors="ignore")
                     logger.info(f"PX4 STATUSTEXT [{msg.severity}]: {text}")
-                    with px4_state.lock:
-                        px4_state.last_status_text = text
+                    with vehicle.lock:
+                        vehicle.last_status_text = text
 
                 elif msg_type in ("MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK", "COMMAND_ACK"):
                     self.mission_msg_queue.put(msg)
@@ -276,39 +535,39 @@ class MavlinkBridge:
                 logger.error(f"Exception in MAVLink reader loop: {e}")
                 time.sleep(0.5)
 
-    def upload_mission(self, checkpoints: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Uploads checkpoints to PX4 via standard MAVLink mission protocol."""
-        if not self.mav or not px4_state.connected:
-            return {"success": False, "error": "PX4 SITL is not connected. Awaiting autopilot heartbeat."}
+    def upload_mission(self, checkpoints: List[Dict[str, Any]], sysid: int = 1) -> Dict[str, Any]:
+        vehicle = gateway_mgr.get_vehicle(sysid)
+        if not self.mav or not vehicle.connected:
+            return {
+                "success": False,
+                "error": f"PX4 SITL (SysID: {sysid}) is not connected. Awaiting autopilot heartbeat."
+            }
 
         count = len(checkpoints)
         if count < 2:
             return {"success": False, "error": "Mission requires at least 2 checkpoints"}
 
-        self.active_checkpoints = checkpoints
-        with px4_state.lock:
-            px4_state.mission_count = count
-            px4_state.mission_state = "idle"
+        with vehicle.lock:
+            vehicle.mission_count = count
+            vehicle.mission_state = "idle"
 
-        logger.info(f"Initiating MAVLink mission upload ({count} items) to PX4...")
+        logger.info(f"Initiating MAVLink mission upload ({count} items) to PX4 SysID {sysid}...")
 
-        # Drain any residual messages from previous uploads
+        # Clear queue
         while not self.mission_msg_queue.empty():
             try:
                 self.mission_msg_queue.get_nowait()
             except queue.Empty:
                 break
 
-        # Send mission count (overwrites previous mission)
+        # Send MISSION_COUNT
         self.mav.mav.mission_count_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             count,
             mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
         )
-        logger.info(f"Sent MAVLink MISSION_COUNT ({count} items) to sys={px4_state.system_id}, comp={px4_state.component_id}")
 
-        # Process mission requests from queue
         last_uploaded_seq = -1
         start_time = time.time()
         while time.time() - start_time < 12.0:
@@ -324,39 +583,33 @@ class MavlinkBridge:
                     cp = checkpoints[seq]
                     cmd = 16 # MAV_CMD_NAV_WAYPOINT
                     p1 = float(cp.get("holdTimeSeconds", cp.get("dwellTimeSeconds", 0.0)))
-                    p2 = float(cp.get("arrivalRadiusMeters", 5.0))
+                    p2 = float(cp.get("arrivalRadiusMeters", 6.0))
                     p3 = 0.0
                     p4 = float("nan")
 
                     if cp.get("action") == "takeoff" or seq == 0:
                         cmd = 22 # MAV_CMD_NAV_TAKEOFF
                         p1 = 0.0
-                        p2 = 0.0
-                        p3 = 0.0
-                        p4 = float("nan")
                     elif cp.get("action") == "land" or seq == count - 1:
                         cmd = 21 # MAV_CMD_NAV_LAND
                         p1 = 0.0
-                        p2 = 0.0
-                        p3 = 0.0
-                        p4 = float("nan")
 
                     lat_val = float(cp.get("latitude", cp.get("lat", 0.0)))
                     lng_val = float(cp.get("longitude", cp.get("lng", 0.0)))
                     lat_int = int(round(lat_val * 1e7))
                     lon_int = int(round(lng_val * 1e7))
-                    alt_m = float(cp.get("altitudeMeters", 20.0))
+                    alt_m = float(cp.get("altitudeMeters", 60.0))
                     if cmd == 21:
                         alt_m = 0.0
 
                     self.mav.mav.mission_item_int_send(
-                        px4_state.system_id,
-                        px4_state.component_id,
+                        vehicle.system_id,
+                        vehicle.component_id,
                         seq,
                         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
                         cmd,
-                        1 if seq == 0 else 0, # current
-                        1, # autocontinue
+                        1 if seq == 0 else 0,
+                        1,
                         p1,
                         p2,
                         p3,
@@ -367,240 +620,145 @@ class MavlinkBridge:
                         mavutil.mavlink.MAV_MISSION_TYPE_MISSION,
                     )
                     last_uploaded_seq = seq
-                    logger.info(f"Uploaded MAVLink mission item #{seq}/{count} (cmd={cmd}, alt={alt_m}m, lat={lat_val}, lng={lng_val})")
 
             elif msg_type == "MISSION_ACK":
                 ack_type = msg.type
                 if last_uploaded_seq >= count - 1:
                     if ack_type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                        logger.info(f"PX4 successfully accepted mission ({count} waypoints)!")
+                        logger.info(f"PX4 SysID {sysid} successfully accepted mission ({count} items)!")
                         return {"success": True, "count": count, "message": "Mission accepted by PX4 Autopilot"}
                     else:
                         logger.error(f"PX4 rejected mission with code: {ack_type}")
                         return {"success": False, "error": f"PX4 rejected mission with ACK code {ack_type}"}
-                else:
-                    logger.info(f"Received intermediate MISSION_ACK({ack_type}) before completing all items (uploaded {last_uploaded_seq + 1}/{count})")
 
         return {"success": False, "error": "Mission upload timed out waiting for PX4 ACK"}
 
-    def arm_and_start(self) -> Dict[str, Any]:
-        """Sets AUTO.MISSION mode, arms vehicle, and starts mission."""
-        if not self.mav or not px4_state.connected:
-            return {"success": False, "error": "PX4 SITL is not connected"}
+    def arm_and_start(self, sysid: int = 1) -> Dict[str, Any]:
+        vehicle = gateway_mgr.get_vehicle(sysid)
+        if not self.mav or not vehicle.connected:
+            return {"success": False, "error": f"PX4 SITL (SysID: {sysid}) is not connected"}
 
-        logger.info("Setting PX4 mode to AUTO.MISSION...")
-        # PX4 custom mode: param2=main_mode (4=AUTO), param3=sub_mode (4=MISSION)
+        # 1. Mode AUTO.MISSION
         self.mav.mav.command_long_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             mavutil.mavlink.MAV_CMD_DO_SET_MODE,
             0,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            4,  # PX4_CUSTOM_MAIN_MODE_AUTO
-            4,  # PX4_CUSTOM_SUB_MODE_AUTO_MISSION
-            0, 0, 0, 0,
+            4, 4, 0, 0, 0, 0,
         )
         time.sleep(0.2)
 
-        logger.info("Sending ARM command to PX4...")
+        # 2. Arm
         self.mav.mav.command_long_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0,
-            1,  # 1 = Arm
-            0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0,
         )
         time.sleep(0.2)
 
-        logger.info("Sending MAV_CMD_MISSION_START to PX4...")
+        # 3. Mission Start
         self.mav.mav.command_long_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             mavutil.mavlink.MAV_CMD_MISSION_START,
             0,
             0, 0, 0, 0, 0, 0, 0,
         )
 
-        with px4_state.lock:
-            px4_state.mission_state = "running"
+        with vehicle.lock:
+            vehicle.mission_state = "running"
 
-        return {"success": True, "state": "running", "message": "PX4 armed and commanded AUTO.MISSION"}
+        return {"success": True, "state": "running", "message": f"PX4 SysID {sysid} armed and commanded AUTO.MISSION"}
 
-    def pause(self) -> Dict[str, Any]:
-        """Commands AUTO.LOITER (Hold) mode."""
-        if not self.mav or not px4_state.connected:
-            return {"success": False, "error": "PX4 SITL is not connected"}
+    def pause(self, sysid: int = 1) -> Dict[str, Any]:
+        vehicle = gateway_mgr.get_vehicle(sysid)
+        if not self.mav or not vehicle.connected:
+            return {"success": False, "error": f"PX4 SITL (SysID: {sysid}) is not connected"}
 
-        logger.info("Setting PX4 mode to AUTO.LOITER (Hold position)...")
-        # PX4 custom mode: param2=4 (AUTO), param3=3 (LOITER)
         self.mav.mav.command_long_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             mavutil.mavlink.MAV_CMD_DO_SET_MODE,
             0,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            4,  # PX4_CUSTOM_MAIN_MODE_AUTO
-            3,  # PX4_CUSTOM_SUB_MODE_AUTO_LOITER
-            0, 0, 0, 0,
+            4, 3, 0, 0, 0, 0, # AUTO.LOITER
         )
+        with vehicle.lock:
+            vehicle.mission_state = "paused"
 
-        with px4_state.lock:
-            px4_state.mission_state = "paused"
+        return {"success": True, "state": "paused", "message": f"PX4 SysID {sysid} commanded AUTO.LOITER hold"}
 
-        return {"success": True, "state": "paused", "message": "PX4 switched to AUTO.LOITER hold mode"}
+    def return_to_launch(self, sysid: int = 1) -> Dict[str, Any]:
+        vehicle = gateway_mgr.get_vehicle(sysid)
+        if not self.mav or not vehicle.connected:
+            return {"success": False, "error": f"PX4 SITL (SysID: {sysid}) is not connected"}
 
-    def return_to_launch(self) -> Dict[str, Any]:
-        """Commands Return-To-Launch."""
-        if not self.mav or not px4_state.connected:
-            return {"success": False, "error": "PX4 SITL is not connected"}
-
-        logger.info("Setting PX4 mode to AUTO.RTL...")
-        # PX4 custom mode: param2=4 (AUTO), param3=5 (RTL)
         self.mav.mav.command_long_send(
-            px4_state.system_id,
-            px4_state.component_id,
+            vehicle.system_id,
+            vehicle.component_id,
             mavutil.mavlink.MAV_CMD_DO_SET_MODE,
             0,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            4,  # PX4_CUSTOM_MAIN_MODE_AUTO
-            5,  # PX4_CUSTOM_SUB_MODE_AUTO_RTL
-            0, 0, 0, 0,
+            4, 5, 0, 0, 0, 0, # AUTO.RTL
         )
-        return {"success": True, "message": "PX4 commanded Return-to-Launch"}
+        return {"success": True, "message": f"PX4 SysID {sysid} commanded Return-to-Launch"}
 
 mavlink_bridge: Optional[MavlinkBridge] = None
 
-# ─── REST ENDPOINTS ──────────────────────────────────────────────────────────
-
-@app.get("/api/v1/px4/status")
-async def get_px4_status() -> Dict[str, Any]:
-    px4_state.check_connection_timeout()
-    with px4_state.lock:
-        return {
-            "connected": px4_state.connected,
-            "armed": px4_state.armed,
-            "flightMode": px4_state.flight_mode,
-            "autopilot": px4_state.autopilot_type,
-            "vehicle": px4_state.vehicle_type,
-            "systemId": px4_state.system_id,
-            "heartbeatAgeSec": round(time.time() - px4_state.last_heartbeat_time, 2) if px4_state.last_heartbeat_time > 0 else None,
-            "missionState": px4_state.mission_state,
-            "currentWaypoint": px4_state.current_waypoint_seq,
-        }
-
-@app.get("/api/v1/px4/telemetry")
-async def get_px4_telemetry() -> Dict[str, Any]:
-    px4_state.check_connection_timeout()
-    return px4_state.to_telemetry_dict()
-
-@app.post("/api/v1/px4/mission")
-async def upload_px4_mission(payload: Any = Body(...)) -> Dict[str, Any]:
-    if isinstance(payload, list):
-        checkpoints = payload
-    elif isinstance(payload, dict):
-        checkpoints = payload.get("checkpoints", [])
-    else:
-        checkpoints = []
-
-    if not checkpoints or not isinstance(checkpoints, list):
-        raise HTTPException(status_code=400, detail="Payload must include a 'checkpoints' list or be a list of checkpoints")
-
-    if not mavlink_bridge:
-        raise HTTPException(status_code=500, detail="MAVLink bridge is not initialized")
-
-    result = mavlink_bridge.upload_mission(checkpoints)
-    if not result.get("success"):
-        raise HTTPException(status_code=422, detail=result.get("error", "Mission upload failed"))
-    return result
-
-@app.post("/api/v1/px4/arm_and_start")
-async def arm_and_start() -> Dict[str, Any]:
-    if not mavlink_bridge:
-        raise HTTPException(status_code=500, detail="MAVLink bridge is not initialized")
-    result = mavlink_bridge.arm_and_start()
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Arming failed"))
-    return result
-
-@app.post("/api/v1/px4/pause")
-async def pause_mission() -> Dict[str, Any]:
-    if not mavlink_bridge:
-        raise HTTPException(status_code=500, detail="MAVLink bridge is not initialized")
-    return mavlink_bridge.pause()
-
-@app.post("/api/v1/px4/rtl")
-async def rtl_mission() -> Dict[str, Any]:
-    if not mavlink_bridge:
-        raise HTTPException(status_code=500, detail="MAVLink bridge is not initialized")
-    return mavlink_bridge.return_to_launch()
-
-# ─── WEBSOCKET TELEMETRY BROADCASTER ─────────────────────────────────────────
-
-@app.websocket("/ws/telemetry")
-async def websocket_telemetry_endpoint(websocket: WebSocket) -> None:
-    await websocket.accept()
-    logger.info(f"WebSocket client connected from {websocket.client.host}")
-    try:
-        while True:
-            px4_state.check_connection_timeout()
-            telemetry_data = px4_state.to_telemetry_dict()
-            await websocket.send_text(json.dumps(telemetry_data))
-            await asyncio.sleep(0.1) # 10 Hz broadcast
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-
-# ─── IN-PROCESS AUTOPILOT SITL TEST HARNESS ─────────────────────────────────
+# ─── HIGH-FIDELITY IN-PROCESS MAVLINK SITL TEST HARNESS ──────────────────────
 
 def run_test_harness(port: int = 14550) -> None:
     """
-    Sends simulated PX4 MAVLink telemetry packets to UDP port 14550.
-    Used for automated end-to-end verification and testing on platforms
-    where modern Gazebo / Linux is not yet running.
+    High-fidelity PX4 MAVLink transmitter. Sends genuine MAVLink v2.0 packets
+    over UDP 127.0.0.1:14550 along the Coimbatore mission corridor.
+    Used for automated verification and end-to-end dashboard testing.
     """
     logger.info(f"Starting in-process PX4 SITL test harness transmitting to UDP 127.0.0.1:{port}...")
-    from pymavlink.dialects.v20 import common as mavlink2
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setblocking(False)
     mav = mavlink2.MAVLink(None, srcSystem=1, srcComponent=1)
 
-    lat = -37.8155
-    lng = 145.1220
+    # Peelamedu origin corridor
+    lat = 11.02580
+    lng = 77.01155
     alt = 0.0
-    hdg = 4500  # 45 deg in centidegrees
+    hdg = 24600  # 246 deg in cdeg
     t = 0.0
+    armed = True
+    mode_auto = (4 << 16) | (4 << 24)
 
-    while True:
+    while gateway_mgr.harness_active:
         t += 0.2
         try:
-            # 1. HEARTBEAT (PX4, Quadrotor, Armed, AUTO.MISSION mode)
-            custom_mode = (4 << 16) | (4 << 24)  # AUTO.MISSION
+            # 1. HEARTBEAT
             hb = mav.heartbeat_encode(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
                 mavutil.mavlink.MAV_AUTOPILOT_PX4,
-                mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED | mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-                custom_mode,
+                mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED if armed else 0,
+                mode_auto,
                 mavutil.mavlink.MAV_STATE_ACTIVE,
             )
             sock.sendto(hb.pack(mav), ("127.0.0.1", port))
 
-            # Simulate drone moving along corridor if armed
-            lat += 0.000015 * math.cos(math.radians(45))
-            lng += 0.000015 * math.sin(math.radians(45))
-            alt = min(85.0, alt + 1.2)
+            # Move along Coimbatore flight corridor
+            if alt < 65.0:
+                alt = min(65.0, alt + 2.5)
+            lat += -0.000018 * 0.9
+            lng += -0.000018 * 1.4
 
             # 2. GLOBAL_POSITION_INT
             pos = mav.global_position_int_encode(
                 int(time.time() * 1000) & 0xFFFFFFFF,
                 int(lat * 1e7),
                 int(lng * 1e7),
-                int((alt + 50) * 1000),  # MSL
-                int(alt * 1000),  # Relative alt
-                int(12.5 * 100 * math.cos(math.radians(45))),  # vx cm/s
-                int(12.5 * 100 * math.sin(math.radians(45))),  # vy cm/s
-                int(-0.1 * 100),  # vz cm/s
+                int((alt + 432.0) * 1000),
+                int(alt * 1000),
+                int(-12.5 * 100),
+                int(-8.5 * 100),
+                int(0.0),
                 hdg,
             )
             sock.sendto(pos.pack(mav), ("127.0.0.1", port))
@@ -608,87 +766,292 @@ def run_test_harness(port: int = 14550) -> None:
             # 3. ATTITUDE
             att = mav.attitude_encode(
                 int(time.time() * 1000) & 0xFFFFFFFF,
-                math.radians(2.0 * math.sin(t)),
-                math.radians(3.5),
-                math.radians(45.0),
-                0.0,
-                0.0,
-                0.0,
+                math.radians(1.5 * math.sin(t)),
+                math.radians(-2.5),
+                math.radians(246.0),
+                0.0, 0.0, 0.0,
             )
             sock.sendto(att.pack(mav), ("127.0.0.1", port))
 
             # 4. SYS_STATUS
             sys_st = mav.sys_status_encode(
-                0, 0, 0, 500, 24500, -1, 92, 0, 0, 0, 0, 0, 0
+                0, 0, 0, 500, 24600, -1, 94, 0, 0, 0, 0, 0, 0
             )
             sock.sendto(sys_st.pack(mav), ("127.0.0.1", port))
 
-            # 5. MISSION_CURRENT
+            # 5. GPS_RAW_INT
+            gps_msg = mav.gps_raw_int_encode(
+                int(time.time() * 1000) & 0xFFFFFFFF,
+                6, # RTK_FIX
+                int(lat * 1e7),
+                int(lng * 1e7),
+                int((alt + 432.0) * 1000),
+                100, 100, 4800, 24600, 21,
+            )
+            sock.sendto(gps_msg.pack(mav), ("127.0.0.1", port))
+
+            # 6. MISSION_CURRENT
             mc = mav.mission_current_encode(1)
             sock.sendto(mc.pack(mav), ("127.0.0.1", port))
-
-            # Process incoming requests from gateway
-            while True:
-                try:
-                    data, _ = sock.recvfrom(4096)
-                    if not data:
-                        break
-                    msgs = mav.parse_buffer(data)
-                    if not msgs:
-                        continue
-                    for in_msg in msgs:
-                        mtype = in_msg.get_type()
-                        if mtype == "MISSION_CLEAR_ALL":
-                            ack = mav.mission_ack_encode(
-                                1, 1, mavutil.mavlink.MAV_MISSION_ACCEPTED, mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-                            )
-                            sock.sendto(ack.pack(mav), ("127.0.0.1", port))
-                        elif mtype == "MISSION_COUNT":
-                            m_count = in_msg.count
-                            for s in range(m_count):
-                                req = mav.mission_request_int_encode(
-                                    1, 1, s, mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-                                )
-                                sock.sendto(req.pack(mav), ("127.0.0.1", port))
-                                time.sleep(0.02)
-                            ack = mav.mission_ack_encode(
-                                1, 1, mavutil.mavlink.MAV_MISSION_ACCEPTED, mavutil.mavlink.MAV_MISSION_TYPE_MISSION
-                            )
-                            sock.sendto(ack.pack(mav), ("127.0.0.1", port))
-                            logger.info(f"Test harness accepted mission with {m_count} waypoints")
-                        elif mtype == "COMMAND_LONG":
-                            cmd_ack = mav.command_ack_encode(
-                                in_msg.command, mavutil.mavlink.MAV_RESULT_ACCEPTED
-                            )
-                            sock.sendto(cmd_ack.pack(mav), ("127.0.0.1", port))
-                except (BlockingIOError, socket.error):
-                    break
 
         except Exception as e:
             logger.error(f"Error in test harness sender: {e}")
 
         time.sleep(0.2)
 
+# ─── REST ENDPOINTS (PRIORITY 4 & 1) ─────────────────────────────────────────
+
+@app.get("/api/v1/health")
+async def get_health() -> Dict[str, Any]:
+    gateway_mgr.update_connection_state()
+    pv = gateway_mgr.get_primary_vehicle()
+    tel_status = pv.check_staleness()
+
+    return {
+        "status": "ok",
+        "backend_version": "1.0.0",
+        "api_status": "CONNECTED",
+        "px4_gateway_status": "LISTENING" if gateway_mgr.mavlink_socket_bound else "ERROR",
+        "mavlink_connection_status": gateway_mgr.connection_state.value,
+        "connection_state": gateway_mgr.connection_state.value,
+        "connection_reason": gateway_mgr.connection_reason,
+        "gazebo_status": "RUNNING" if pv.connected else "STANDALONE",
+        "simulation_mode": gateway_mgr.simulation_mode,
+        "telemetry_status": tel_status,
+        "udp_port": 14550,
+        "udp_host": "0.0.0.0",
+        "connected_vehicles_count": sum(1 for v in gateway_mgr.vehicles.values() if v.connected),
+        "primary_vehicle_id": pv.callsign,
+        "last_heartbeat_timestamp": pv.last_heartbeat_time if pv.last_heartbeat_time > 0 else None,
+        "last_heartbeat_age_sec": round(time.time() - pv.last_heartbeat_time, 2) if pv.last_heartbeat_time > 0 else None,
+        "test_harness_active": gateway_mgr.harness_active,
+    }
+
+@app.get("/api/v1/system/status")
+async def get_system_status() -> Dict[str, Any]:
+    gateway_mgr.update_connection_state()
+    pv = gateway_mgr.get_primary_vehicle()
+    return {
+        "connected": pv.connected,
+        "state": gateway_mgr.connection_state.value,
+        "reason": gateway_mgr.connection_reason,
+        "primarySysId": pv.system_id,
+        "flightMode": pv.flight_mode,
+        "armed": pv.armed,
+        "activeMissions": len(gateway_mgr.active_missions),
+        "totalVehicles": len(gateway_mgr.vehicles),
+        "simulationMode": gateway_mgr.simulation_mode,
+    }
+
+@app.get("/api/v1/vehicles")
+async def get_all_vehicles() -> List[Dict[str, Any]]:
+    return [v.to_dict() for v in gateway_mgr.vehicles.values()]
+
+@app.get("/api/v1/vehicles/{vehicle_id}")
+async def get_vehicle_by_id(vehicle_id: str) -> Dict[str, Any]:
+    # Match by callsign (AV-01) or sysid
+    for v in gateway_mgr.vehicles.values():
+        if v.callsign.lower() == vehicle_id.lower() or str(v.system_id) == vehicle_id:
+            return v.to_dict()
+    raise HTTPException(status_code=404, detail=f"Vehicle '{vehicle_id}' not found")
+
+@app.get("/api/v1/vehicles/{vehicle_id}/telemetry")
+@app.get("/api/v1/drones/{vehicle_id}/telemetry")
+async def get_vehicle_telemetry(vehicle_id: str) -> Dict[str, Any]:
+    for v in gateway_mgr.vehicles.values():
+        if v.callsign.lower() == vehicle_id.lower() or str(v.system_id) == vehicle_id:
+            return v.to_dict()
+    # Fallback to primary vehicle
+    return gateway_mgr.get_primary_vehicle().to_dict()
+
+@app.get("/api/v1/drones/{drone_id}/camera")
+async def get_drone_camera_metadata(drone_id: str) -> Dict[str, Any]:
+    pv = gateway_mgr.get_primary_vehicle()
+    return {
+        "droneId": drone_id,
+        "status": "fallback" if not pv.connected else "active",
+        "streamUrl": f"http://localhost:8000/api/v1/drones/{drone_id}/stream",
+        "resolution": "1920x1080",
+        "frameRateFps": 30,
+        "syntheticOverlay": True,
+        "opticalGimbalLocked": True,
+        "cameraType": "EO_IR_GIMBAL_4K",
+    }
+
+# ─── MISSIONS API ────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/missions")
+async def get_all_missions() -> List[Dict[str, Any]]:
+    return list(gateway_mgr.active_missions.values())
+
+@app.get("/api/v1/missions/{mission_id}")
+async def get_mission(mission_id: str) -> Dict[str, Any]:
+    m = gateway_mgr.active_missions.get(mission_id)
+    if not m:
+        raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+    return m
+
+@app.get("/api/v1/missions/{mission_id}/checkpoints")
+async def get_mission_checkpoints(mission_id: str) -> Dict[str, Any]:
+    m = gateway_mgr.active_missions.get(mission_id)
+    if not m:
+        raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+    return {"missionId": mission_id, "checkpoints": m.get("checkpoints", [])}
+
+@app.get("/api/v1/missions/{mission_id}/status")
+async def get_mission_status(mission_id: str) -> Dict[str, Any]:
+    m = gateway_mgr.active_missions.get(mission_id)
+    if not m:
+        raise HTTPException(status_code=404, detail=f"Mission '{mission_id}' not found")
+    pv = gateway_mgr.get_primary_vehicle()
+    return {
+        "id": mission_id,
+        "name": m.get("name"),
+        "status": pv.mission_state if pv.connected else m.get("status", "idle"),
+        "currentCheckpointIndex": pv.current_waypoint_seq if pv.connected else m.get("currentCheckpointIndex", 0),
+        "totalCheckpoints": len(m.get("checkpoints", [])),
+    }
+
+@app.post("/api/v1/missions/{mission_id}/start")
+@app.post("/api/v1/simulation/start")
+async def start_mission(mission_id: Optional[str] = None, payload: Any = Body(None)) -> Dict[str, Any]:
+    m_id = mission_id or (payload.get("missionId") if isinstance(payload, dict) else "MSN-CBE-01")
+    m = gateway_mgr.active_missions.get(m_id)
+    if not m:
+        m = gateway_mgr.active_missions.get("MSN-CBE-01")
+
+    if mavlink_bridge and gateway_mgr.get_primary_vehicle().connected:
+        if m and "checkpoints" in m:
+            mavlink_bridge.upload_mission(m["checkpoints"])
+        res = mavlink_bridge.arm_and_start()
+        return res
+
+    # Standalone mock start
+    if m:
+        m["status"] = "running"
+    return {"success": True, "state": "running", "message": f"Mission {m_id} started in mock mode"}
+
+@app.post("/api/v1/missions/{mission_id}/pause")
+@app.post("/api/v1/simulation/pause")
+async def pause_mission(mission_id: Optional[str] = None, payload: Any = Body(None)) -> Dict[str, Any]:
+    if mavlink_bridge and gateway_mgr.get_primary_vehicle().connected:
+        return mavlink_bridge.pause()
+
+    m_id = mission_id or (payload.get("missionId") if isinstance(payload, dict) else "MSN-CBE-01")
+    m = gateway_mgr.active_missions.get(m_id)
+    if m:
+        m["status"] = "paused"
+    return {"success": True, "state": "paused", "message": "Simulation paused"}
+
+@app.post("/api/v1/missions/{mission_id}/resume")
+@app.post("/api/v1/simulation/resume")
+async def resume_mission(mission_id: Optional[str] = None, payload: Any = Body(None)) -> Dict[str, Any]:
+    if mavlink_bridge and gateway_mgr.get_primary_vehicle().connected:
+        return mavlink_bridge.arm_and_start()
+
+    m_id = mission_id or (payload.get("missionId") if isinstance(payload, dict) else "MSN-CBE-01")
+    m = gateway_mgr.active_missions.get(m_id)
+    if m:
+        m["status"] = "running"
+    return {"success": True, "state": "running", "message": "Simulation resumed"}
+
+@app.post("/api/v1/missions/{mission_id}/reset")
+@app.post("/api/v1/simulation/reset")
+async def reset_mission(mission_id: Optional[str] = None, payload: Any = Body(None)) -> Dict[str, Any]:
+    m_id = mission_id or (payload.get("missionId") if isinstance(payload, dict) else "MSN-CBE-01")
+    m = gateway_mgr.active_missions.get(m_id)
+    if m:
+        m["status"] = "idle"
+        m["currentCheckpointIndex"] = 0
+    pv = gateway_mgr.get_primary_vehicle()
+    with pv.lock:
+        pv.mission_state = "idle"
+        pv.current_waypoint_seq = 0
+    return {"success": True, "state": "idle", "message": "Mission reset to initial checkpoint"}
+
+@app.post("/api/v1/simulation/faults")
+async def inject_fault(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    fault_type = payload.get("faultType", "gps_degradation")
+    target_drone = payload.get("droneId", "AV-01")
+    logger.warning(f"Simulated fault injected: {fault_type} on {target_drone}")
+    return {
+        "success": True,
+        "faultType": fault_type,
+        "targetDrone": target_drone,
+        "active": True,
+        "message": f"Simulated {fault_type} active on {target_drone} (Simulation Mode Only)",
+    }
+
+@app.post("/api/v1/simulation/mode")
+async def set_simulation_mode(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    new_mode = payload.get("mode", "px4")
+    if new_mode in ("px4", "mock"):
+        gateway_mgr.simulation_mode = new_mode
+        return {"success": True, "mode": new_mode}
+    raise HTTPException(status_code=400, detail="Mode must be 'px4' or 'mock'")
+
+@app.post("/api/v1/simulation/harness/toggle")
+async def toggle_harness() -> Dict[str, Any]:
+    """Toggles built-in PX4 SITL test harness transmitting on UDP:14550."""
+    if not gateway_mgr.harness_active:
+        gateway_mgr.harness_active = True
+        gateway_mgr.harness_thread = threading.Thread(target=run_test_harness, args=(14550,), daemon=True)
+        gateway_mgr.harness_thread.start()
+        logger.info("Test harness transmitter ACTIVATED on UDP 127.0.0.1:14550")
+        return {"success": True, "harnessActive": True, "message": "Test harness transmitting MAVLink on UDP:14550"}
+    else:
+        gateway_mgr.harness_active = False
+        logger.info("Test harness transmitter DEACTIVATED")
+        return {"success": True, "harnessActive": False, "message": "Test harness stopped"}
+
+# ─── REAL-TIME WEBSOCKET TELEMETRY BROADCASTER ───────────────────────────────
+
+@app.websocket("/api/v1/ws/telemetry")
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry_endpoint(websocket: WebSocket) -> None:
+    await websocket.accept()
+    logger.info(f"WebSocket client connected from {websocket.client.host}:{websocket.client.port}")
+    try:
+        while True:
+            gateway_mgr.update_connection_state()
+            pv = gateway_mgr.get_primary_vehicle()
+            telemetry_data = pv.to_dict()
+            # Include gateway diagnostic state
+            telemetry_data["gatewayState"] = gateway_mgr.connection_state.value
+            telemetry_data["gatewayReason"] = gateway_mgr.connection_reason
+            telemetry_data["simulationMode"] = gateway_mgr.simulation_mode
+
+            await websocket.send_text(json.dumps(telemetry_data))
+            await asyncio.sleep(0.1) # 10 Hz broadcast
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected normally")
+    except Exception as e:
+        logger.error(f"WebSocket streaming error: {e}")
+
 # ─── MAIN ENTRY POINT ────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PX4 SITL & Gazebo Gateway")
-    parser.add_argument("--mavlink-port", default="udpin:0.0.0.0:14550", help="MAVLink connection string (default: udpin:0.0.0.0:14550)")
-    parser.add_argument("--http-port", type=int, default=8080, help="HTTP/WebSocket port for TASPORA web app (default: 8080)")
+    parser = argparse.ArgumentParser(description="AEROVATA PX4 SITL Gateway & Backend Server")
+    parser.add_argument("--mavlink-port", default=DEFAULT_MAVLINK_PORT, help=f"MAVLink connection string (default: {DEFAULT_MAVLINK_PORT})")
+    parser.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT, help=f"HTTP/REST API port (default: {DEFAULT_HTTP_PORT})")
     parser.add_argument("--test-harness", action="store_true", help="Launch built-in PX4 SITL test harness on UDP:14550 for automated verification")
     args = parser.parse_args()
+
+    gateway_mgr.http_port = args.http_port
+    gateway_mgr.connection_str = args.mavlink_port
 
     global mavlink_bridge
     mavlink_bridge = MavlinkBridge(args.mavlink_port)
     mavlink_bridge.start()
 
     if args.test_harness:
-        th_thread = threading.Thread(target=run_test_harness, args=(14550,), daemon=True)
-        th_thread.start()
+        gateway_mgr.harness_active = True
+        gateway_mgr.harness_thread = threading.Thread(target=run_test_harness, args=(14550,), daemon=True)
+        gateway_mgr.harness_thread.start()
         logger.info("Test harness transmitter active on UDP 127.0.0.1:14550")
 
-    logger.info(f"Starting AEROVATA PX4 Gateway API on http://127.0.0.1:{args.http_port}...")
-    uvicorn.run(app, host="127.0.0.1", port=args.http_port, log_level="info")
+    logger.info(f"Starting AEROVATA Unified Backend on http://0.0.0.0:{args.http_port} (REST API: /api/v1, WS: /api/v1/ws/telemetry)...")
+    uvicorn.run(app, host="0.0.0.0", port=args.http_port, log_level="info")
 
 if __name__ == "__main__":
     main()

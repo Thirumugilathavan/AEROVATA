@@ -7,7 +7,7 @@
  * For simulation and software demonstration only.
  */
 
-import type { Checkpoint, Mission, MissionState, MissionTelemetry } from '../types/mission.ts';
+import type { Checkpoint, Mission, MissionState, MissionTelemetry } from '../types/mission';
 
 export interface IMissionController {
   /** Loads and validates a mission definition */

@@ -6,8 +6,8 @@
  * Rejects invalid routes and triggers controller error states.
  */
 
-import type { Checkpoint, Mission } from '../types/mission.ts';
-import { getDistanceMeters } from '../services/telemetryEngine.ts';
+import type { Checkpoint, Mission } from '../types/mission';
+import { getDistanceMeters } from '../services/telemetryEngine';
 
 export interface ValidationResult {
   valid: boolean;
@@ -102,19 +102,19 @@ export function validateMission(mission: Mission | null | undefined): Validation
         checkpointIndex: i,
       };
     }
+  }
 
-    // Check consecutive duplicate coordinates
-    if (i > 0) {
-      const prev = mission.checkpoints[i - 1];
-      const dist = getDistanceMeters(prev.lat, prev.lng, cp.lat, cp.lng);
-      if (dist < 0.5) {
-        return {
-          valid: false,
-          error: `Consecutive checkpoints #${i} and #${cpNum} are geographically identical (${dist.toFixed(2)}m apart). Distinct checkpoints required.`,
-          field: 'coordinates',
-          checkpointIndex: i,
-        };
-      }
+  // Ensure consecutive checkpoints are not duplicate coordinates (< 1 meter)
+  for (let i = 0; i < mission.checkpoints.length - 1; i++) {
+    const a = mission.checkpoints[i];
+    const b = mission.checkpoints[i + 1];
+    const dist = getDistanceMeters(a.lat, a.lng, b.lat, b.lng);
+    if (dist < 1.0) {
+      return {
+        valid: false,
+        error: `Checkpoint #${i + 1} and #${i + 2} have identical coordinates (separation: ${dist.toFixed(2)}m). Consecutive checkpoints must have non-zero separation.`,
+        checkpointIndex: i + 1,
+      };
     }
   }
 

@@ -7,11 +7,11 @@
  * For simulation and software demonstration only. Do not issue commands to physical aircraft.
  */
 
-import type { Checkpoint, Mission, MissionState, MissionTelemetry } from '../types/mission.ts';
-import type { IMissionController } from './types.ts';
-import { MissionStateMachine } from './MissionStateMachine.ts';
-import { validateMission } from './validation.ts';
-import { getDistanceMeters, getBearingDegrees } from '../services/telemetryEngine.ts';
+import type { Checkpoint, Mission, MissionState, MissionTelemetry } from '../types/mission';
+import type { IMissionController } from './types';
+import { MissionStateMachine } from './MissionStateMachine';
+import { validateMission } from './validation';
+import { getDistanceMeters, getBearingDegrees } from '../services/telemetryEngine';
 
 export class SimulationMissionController implements IMissionController {
   private stateMachine: MissionStateMachine;
@@ -378,71 +378,58 @@ export class SimulationMissionController implements IMissionController {
     this.currentMission.status = 'completed';
     this.currentMission.progressPercent = 100;
     this.currentMission.estimatedRemainingSeconds = 0;
-    this.currentMission.dwellRemainingSeconds = 0;
 
-    // Mark all reached
-    this.currentMission.checkpoints.forEach((cp) => (cp.status = 'reached'));
+    // Mark final checkpoint reached
+    const finalCp = this.currentMission.checkpoints[this.currentMission.checkpoints.length - 1];
+    if (finalCp) {
+      finalCp.status = 'reached';
+    }
 
     this.currentTelemetry.missionStatus = 'completed';
     this.currentTelemetry.groundSpeedKmh = 0;
     this.currentTelemetry.verticalSpeedMs = 0;
     this.currentTelemetry.distanceToNextCheckpointMeters = 0;
-    this.currentTelemetry.isDwellActive = false;
-
     this.notifyListeners();
   }
 
   private updateProgress(): void {
     if (!this.currentMission || !this.currentTelemetry) return;
 
-    const totalCheckpoints = this.currentMission.checkpoints.length;
-    if (totalCheckpoints <= 1) return;
+    const checkpoints = this.currentMission.checkpoints;
+    const curIdx = this.currentMission.currentCheckpointIndex;
 
-    const reachedCount = this.currentMission.checkpoints.filter((cp) => cp.status === 'reached').length;
-    const rawProgress = (reachedCount / (totalCheckpoints - 1)) * 100;
-    this.currentMission.progressPercent = Math.min(100, Math.round(rawProgress));
+    // Calculate completed distance
+    let completedDist = 0;
+    for (let i = 0; i < curIdx - 1; i++) {
+      completedDist += getDistanceMeters(
+        checkpoints[i].lat,
+        checkpoints[i].lng,
+        checkpoints[i + 1].lat,
+        checkpoints[i + 1].lng
+      );
+    }
+
+    // Add distance traversed along current leg
+    if (curIdx > 0 && curIdx < checkpoints.length) {
+      const prevCp = checkpoints[curIdx - 1];
+      const legDist = getDistanceMeters(prevCp.lat, prevCp.lng, checkpoints[curIdx].lat, checkpoints[curIdx].lng);
+      const remainingLeg = this.currentTelemetry.distanceToNextCheckpointMeters;
+      completedDist += Math.max(0, legDist - remainingLeg);
+    }
+
+    const totalDist = this.currentMission.totalDistanceMeters || 1;
+    this.currentMission.progressPercent = Math.min(100, Math.round((completedDist / totalDist) * 100));
 
     // Remaining time estimate
-    const remainingCheckpoints = this.currentMission.checkpoints.slice(this.currentMission.currentCheckpointIndex);
-    let remainingDistance = this.currentTelemetry.distanceToNextCheckpointMeters;
-    let remainingDwell = 0;
-
-    for (let i = 0; i < remainingCheckpoints.length - 1; i++) {
-      const a = remainingCheckpoints[i];
-      const b = remainingCheckpoints[i + 1];
-      remainingDistance += getDistanceMeters(a.lat, a.lng, b.lat, b.lng);
-      remainingDwell += b.dwellTimeSeconds;
-    }
-
-    const avgSpeedMs = (45 * 1000) / 3600; // ~12.5 m/s
-    const flightTimeSec = remainingDistance / avgSpeedMs;
-    this.currentMission.estimatedRemainingSeconds = Math.round(flightTimeSec + remainingDwell);
-  }
-
-  private startInternalTicker(): void {
-    this.stopInternalTicker();
-    const tickIntervalMs = 200; // 5 Hz update rate for silky smooth animations
-    this.intervalId = setInterval(() => {
-      const deltaSec = (tickIntervalMs / 1000) * this.speedMultiplier;
-      this.step(deltaSec);
-    }, tickIntervalMs);
-  }
-
-  private stopInternalTicker(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
+    const remainingMeters = Math.max(0, totalDist - completedDist);
+    const avgSpeedMs = (45 * 1000) / 3600;
+    this.currentMission.estimatedRemainingSeconds = Math.round(remainingMeters / avgSpeedMs);
   }
 
   public subscribe(listener: (mission: Mission, telemetry: MissionTelemetry) => void): () => void {
     this.listeners.push(listener);
     if (this.currentMission && this.currentTelemetry) {
-      try {
-        listener(this.currentMission, this.currentTelemetry);
-      } catch (err) {
-        console.error('Error in initial subscriber dispatch:', err);
-      }
+      listener(this.currentMission, this.currentTelemetry);
     }
     return () => {
       this.listeners = this.listeners.filter((l) => l !== listener);
@@ -455,13 +442,31 @@ export class SimulationMissionController implements IMissionController {
       try {
         listener(this.currentMission, this.currentTelemetry);
       } catch (err) {
-        console.error('Error dispatching to controller subscriber:', err);
+        console.error('Error in controller listener:', err);
       }
     }
   }
 
+  private startInternalTicker(): void {
+    this.stopInternalTicker();
+    const tickHz = 10; // 10 updates per second for smooth rendering
+    const intervalMs = 1000 / tickHz;
+
+    this.intervalId = setInterval(() => {
+      const deltaSec = (1 / tickHz) * this.speedMultiplier;
+      this.step(deltaSec);
+    }, intervalMs);
+  }
+
+  private stopInternalTicker(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
+
   private createDefaultTelemetry(mission: Mission, status: MissionState): MissionTelemetry {
-    const cp = mission.checkpoints && mission.checkpoints[0] ? mission.checkpoints[0] : { lat: -37.8155, lng: 145.122, altitudeMeters: 0 };
+    const cp = mission.checkpoints[0] || { lat: -37.8155, lng: 145.1220, altitudeMeters: 0 };
     return {
       droneId: mission.droneId,
       timestamp: Date.now(),
@@ -475,7 +480,7 @@ export class SimulationMissionController implements IMissionController {
       batteryVoltage: 24.8,
       signalQualityPercent: 99,
       rtkFix: 'RTK_FIX',
-      satellites: 18,
+      satellites: 20,
       currentCheckpointIndex: 0,
       distanceToNextCheckpointMeters: 0,
       missionStatus: status,

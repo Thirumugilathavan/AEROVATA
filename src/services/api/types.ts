@@ -5,7 +5,7 @@
  * Formal API contract decoupling UI components from backend implementation.
  */
 
-import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission.ts';
+import type { Checkpoint, Mission, MissionState, MissionTelemetry, CameraFeedMetadata } from '../../types/mission';
 
 export interface IMissionApiAdapter {
   /** Gets or sets the backend base URL (e.g. "http://localhost:8000/api/v1") */

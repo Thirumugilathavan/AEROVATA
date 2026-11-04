@@ -29,8 +29,8 @@ import {
   ExternalLink,
   Code
 } from 'lucide-react';
-import type { Mission, MissionTelemetry, Checkpoint } from '../types/mission.ts';
-import { apiService, ALL_PRESET_MISSIONS, ApiMode } from '../services/api/index.ts';
+import type { Mission, MissionTelemetry, Checkpoint } from '../types/mission';
+import { apiService, ALL_PRESET_MISSIONS, ApiMode } from '../services/api/index';
 
 interface CheckpointMissionPanelProps {
   onOpenApiContract?: () => void;

@@ -8,10 +8,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MissionStateMachine } from './MissionStateMachine.ts';
-import { validateMission } from './validation.ts';
-import { SimulationMissionController } from './SimulationMissionController.ts';
-import type { Mission, Checkpoint } from '../types/mission.ts';
+import { MissionStateMachine } from './MissionStateMachine';
+import { validateMission } from './validation';
+import { SimulationMissionController } from './SimulationMissionController';
+import type { Mission, Checkpoint } from '../types/mission';
 
 function createValidTestMission(): Mission {
   const checkpoints: Checkpoint[] = [
@@ -89,11 +89,11 @@ test('MissionStateMachine transitions correctly', () => {
   assert.strictEqual(sm.transition('running'), true);
   assert.strictEqual(sm.getState(), 'running');
 
-  // Invalid: cannot jump directly from running to idle without reset
-  assert.strictEqual(sm.canTransition('idle'), true); // Reset allowed
+  // Valid: can transition to idle for reset
+  assert.strictEqual(sm.canTransition('idle'), true);
 
-  // Invalid: cannot jump to invalid state
-  assert.strictEqual(sm.canTransition('running'), false); // Cannot transition to self
+  // Invalid: cannot transition to self
+  assert.strictEqual(sm.canTransition('running'), false);
 });
 
 test('MissionStateMachine rejects invalid transitions', () => {
@@ -180,8 +180,6 @@ test('SimulationMissionController starts, advances checkpoints, and finishes', (
   assert.strictEqual(controller.getState(), 'running');
 
   // Step simulation forward until drone reaches Checkpoint 2 (cp-02)
-  // Distance from cp1 to cp2 is approx 330m. At 45 km/h (12.5 m/s), it takes ~27 seconds.
-  // Step in 5s increments
   for (let i = 0; i < 7; i++) {
     controller.step(5);
   }

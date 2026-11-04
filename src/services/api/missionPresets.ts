@@ -3,7 +3,177 @@
  * AEROVATA by TASPORA - Checkpoint Missions
  */
 
-import type { Mission } from '../../types/mission.ts';
+import type { Mission } from '../../types/mission';
+
+export const MISSION_COIMBATORE_CMCH: Mission = {
+  id: 'MSN-CBE-01',
+  title: 'Coimbatore CMCH Trauma Center Rapid Blood Transport',
+  description: 'Deterministic BVLOS corridor from Peelamedu Transit Depot to CMCH Trauma Center Heliport, maintaining +48.5m clearance above Avinashi Elevated Viaduct.',
+  priority: 'URGENT',
+  droneId: 'AV-01',
+  droneCallsign: 'DRONE 01',
+  status: 'idle',
+  checkpoints: [
+    {
+      id: 'cp-cbe-01',
+      sequence: 1,
+      name: 'Peelamedu Transit Depot (Origin Pad)',
+      lat: 11.0260,
+      lng: 77.0120,
+      altitudeMeters: 65,
+      targetSpeedKmh: 45,
+      arrivalRadiusMeters: 8,
+      dwellTimeSeconds: 0,
+      action: 'takeoff',
+      status: 'pending',
+      notes: 'Initial climb to 65m AGL with automated ADS-B broadcast',
+    },
+    {
+      id: 'cp-cbe-02',
+      sequence: 2,
+      name: 'Nava India Sky Corridor',
+      lat: 11.0180,
+      lng: 76.9940,
+      altitudeMeters: 65,
+      targetSpeedKmh: 48,
+      arrivalRadiusMeters: 10,
+      dwellTimeSeconds: 0,
+      action: 'transit',
+      status: 'pending',
+      notes: 'Clearance maintained above Avinashi Expressway deck (16.5m AGL)',
+    },
+    {
+      id: 'cp-cbe-03',
+      sequence: 3,
+      name: 'Lakshmi Mills Overfly Corridor',
+      lat: 11.0105,
+      lng: 76.9830,
+      altitudeMeters: 65,
+      targetSpeedKmh: 45,
+      arrivalRadiusMeters: 10,
+      dwellTimeSeconds: 2,
+      action: 'hover_inspect',
+      status: 'pending',
+      notes: '3D micro-radar clearance scan across junction flyover',
+    },
+    {
+      id: 'cp-cbe-04',
+      sequence: 4,
+      name: 'Collectorate Junction Transit',
+      lat: 11.0060,
+      lng: 76.9740,
+      altitudeMeters: 55,
+      targetSpeedKmh: 38,
+      arrivalRadiusMeters: 8,
+      dwellTimeSeconds: 0,
+      action: 'transit',
+      status: 'pending',
+      notes: 'Descent path initiation towards CMCH Hospital sector',
+    },
+    {
+      id: 'cp-cbe-05',
+      sequence: 5,
+      name: 'CMCH Trauma Center Pad 1 (Destination)',
+      lat: 11.0025,
+      lng: 76.9665,
+      altitudeMeters: 45,
+      targetSpeedKmh: 24,
+      arrivalRadiusMeters: 6,
+      dwellTimeSeconds: 5,
+      action: 'drop_payload',
+      status: 'pending',
+      notes: 'Autonomous tether drop of emergency blood units; PIN verified',
+    },
+  ],
+  currentCheckpointIndex: 0,
+  totalDistanceMeters: 5600,
+  elapsedTimeSeconds: 0,
+  estimatedRemainingSeconds: 420,
+  progressPercent: 0,
+};
+
+export const MISSION_COIMBATORE_TIDEL: Mission = {
+  id: 'MSN-CBE-02',
+  title: 'Gandhipuram to TIDEL Park IT SEZ Pathology Express',
+  description: 'Urgent cardiac enzyme transport from Gandhipuram Diagnostic Hub to TIDEL Park Med-Dock via North Avinashi corridor.',
+  priority: 'HIGH',
+  droneId: 'AV-02',
+  droneCallsign: 'DRONE 02',
+  status: 'idle',
+  checkpoints: [
+    {
+      id: 'cp-tidel-01',
+      sequence: 1,
+      name: 'Gandhipuram Diagnostic Hub Pad',
+      lat: 11.0180,
+      lng: 76.9680,
+      altitudeMeters: 60,
+      targetSpeedKmh: 40,
+      arrivalRadiusMeters: 8,
+      dwellTimeSeconds: 0,
+      action: 'takeoff',
+      status: 'pending',
+    },
+    {
+      id: 'cp-tidel-02',
+      sequence: 2,
+      name: 'Ramakrishna Mill Transit Corridor',
+      lat: 11.0210,
+      lng: 76.9850,
+      altitudeMeters: 62,
+      targetSpeedKmh: 44,
+      arrivalRadiusMeters: 10,
+      dwellTimeSeconds: 0,
+      action: 'transit',
+      status: 'pending',
+    },
+    {
+      id: 'cp-tidel-03',
+      sequence: 3,
+      name: 'PSG Tech Innovation Skyway',
+      lat: 11.0245,
+      lng: 77.0040,
+      altitudeMeters: 65,
+      targetSpeedKmh: 46,
+      arrivalRadiusMeters: 10,
+      dwellTimeSeconds: 2,
+      action: 'scan_area',
+      status: 'pending',
+    },
+    {
+      id: 'cp-tidel-04',
+      sequence: 4,
+      name: 'Civil Aerodrome Buffer Checkpoint',
+      lat: 11.0265,
+      lng: 77.0180,
+      altitudeMeters: 60,
+      targetSpeedKmh: 42,
+      arrivalRadiusMeters: 8,
+      dwellTimeSeconds: 0,
+      action: 'transit',
+      status: 'pending',
+      notes: 'Bypassing Sulur / CJB Aerodrome Red Zone strictly to the north',
+    },
+    {
+      id: 'cp-tidel-05',
+      sequence: 5,
+      name: 'TIDEL Park IT SEZ Med-Dock (Destination)',
+      lat: 11.0275,
+      lng: 77.0268,
+      altitudeMeters: 45,
+      targetSpeedKmh: 20,
+      arrivalRadiusMeters: 5,
+      dwellTimeSeconds: 4,
+      action: 'drop_payload',
+      status: 'pending',
+    },
+  ],
+  currentCheckpointIndex: 0,
+  totalDistanceMeters: 6800,
+  elapsedTimeSeconds: 0,
+  estimatedRemainingSeconds: 510,
+  progressPercent: 0,
+};
 
 export const MISSION_HOSPITAL_RUSH: Mission = {
   id: 'MSN-TAS-01',
@@ -190,8 +360,7 @@ export const MISSION_PERIMETER_PATROL: Mission = {
 
 /**
  * INVALID TEST CASE
- * Specifically crafted to test PRIORITY 1:
- * "Ensure the mission stops in an error state when its input data is invalid."
+ * Specifically crafted to test error state handling:
  * Contains negative altitude and out-of-range coordinates.
  */
 export const MISSION_INVALID_FAULT_TEST: Mission = {
@@ -238,6 +407,8 @@ export const MISSION_INVALID_FAULT_TEST: Mission = {
 };
 
 export const ALL_PRESET_MISSIONS = [
+  MISSION_COIMBATORE_CMCH,
+  MISSION_COIMBATORE_TIDEL,
   MISSION_HOSPITAL_RUSH,
   MISSION_PERIMETER_PATROL,
   MISSION_INVALID_FAULT_TEST,

@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test ./src/controller/controller.test.ts ./src/services/px4/coordinateTransform.test.ts",
+    "test": "jiti ./src/controller/controller.test.ts && jiti ./src/services/px4/coordinateTransform.test.ts",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.3",
     "canvas-confetti": "^1.9.4",
     "lucide-react": "^1.63.0",
     "maplibre-gl": "^6.16.0",

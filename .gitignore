@@ -40,11 +40,3 @@ Thumbs.db
 .cache/
 tsconfig.app.tsbuildinfo
 tsconfig.node.tsbuildinfo
-
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
