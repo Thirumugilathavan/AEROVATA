@@ -1,0 +1,36 @@
+{
+  "checkpoints": [
+    {
+      "id": "cp-1",
+      "name": "Takeoff",
+      "latitude": 47.397971,
+      "longitude": 8.546164,
+      "altitudeMeters": 15,
+      "action": "takeoff"
+    },
+    {
+      "id": "cp-2",
+      "name": "Waypoint 1",
+      "latitude": 47.398300,
+      "longitude": 8.546400,
+      "altitudeMeters": 20,
+      "action": "waypoint"
+    },
+    {
+      "id": "cp-3",
+      "name": "Waypoint 2",
+      "latitude": 47.397971,
+      "longitude": 8.546164,
+      "altitudeMeters": 15,
+      "action": "waypoint"
+    },
+    {
+      "id": "cp-4",
+      "name": "Land",
+      "latitude": 47.397971,
+      "longitude": 8.546164,
+      "altitudeMeters": 0,
+      "action": "land"
+    }
+  ]
+}

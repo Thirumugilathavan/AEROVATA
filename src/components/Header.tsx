@@ -12,18 +12,21 @@ import {
   Layers,
   BarChart3,
   Plane,
+  Camera,
+  Code,
   Info
 } from 'lucide-react';
 import { AirspaceAlert } from '../types/fleet';
 
 interface HeaderProps {
-  activeTab: 'live' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about';
-  setActiveTab: (tab: 'live' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about') => void;
+  activeTab: 'live' | 'camera' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about';
+  setActiveTab: (tab: 'live' | 'camera' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about') => void;
   alerts: AirspaceAlert[];
   isMuted: boolean;
   setIsMuted: React.Dispatch<React.SetStateAction<boolean>>;
   onOpenSettings: () => void;
   onOpenReplay: () => void;
+  onOpenApiContract?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   setIsMuted,
   onOpenSettings,
   onOpenReplay,
+  onOpenApiContract,
 }) => {
   const [time, setTime] = React.useState<string>(() => new Date().toTimeString().split(' ')[0]);
 
@@ -82,6 +86,24 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Radio className="w-3.5 h-3.5 text-cyan-400" />
             Live Operations
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('camera');
+              window.history.pushState({}, '', '/live-camera');
+            }}
+            className={`px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 ${
+              activeTab === 'camera'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_10px_rgba(6,182,212,0.2)]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+            }`}
+          >
+            <Camera className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Live Camera</span>
+            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono">
+              HUD
+            </span>
           </button>
 
           <button
@@ -156,6 +178,16 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
           <span>Mission Replay</span>
+        </button>
+
+        {/* API Contract Specification modal button */}
+        <button
+          onClick={onOpenApiContract}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-300 bg-[#161d2d] hover:bg-[#1e273d] border border-[#2b3a58] rounded transition-colors"
+          title="View REST API Contract & Schemas"
+        >
+          <Code className="w-3.5 h-3.5 text-cyan-400" />
+          <span>API Spec</span>
         </button>
 
         {/* Audio Mute toggle */}

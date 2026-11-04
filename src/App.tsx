@@ -15,6 +15,13 @@ import { AirspaceView } from './components/AirspaceView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { AboutModal } from './components/AboutModal';
 import { SettingsModal } from './components/SettingsModal';
+import { LiveCameraScreen } from './components/LiveCameraScreen';
+import { CheckpointMissionPanel } from './components/CheckpointMissionPanel';
+import { ApiContractModal } from './components/ApiContractModal';
+import { Px4SitlStatusBanner } from './components/Px4SitlStatusBanner';
+import { Px4SetupModal } from './components/Px4SetupModal';
+import { apiService } from './services/api/index';
+import type { Mission, MissionTelemetry } from './types/mission';
 import { 
   INITIAL_DRONES, 
   INITIAL_GEOFENCES, 
@@ -36,7 +43,23 @@ import {
 
 export function App() {
   // Navigation tab
-  const [activeTab, setActiveTab] = useState<'live' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about'>('live');
+  // Dedicated route detection for /live-camera
+  const [activeTab, setActiveTab] = useState<'live' | 'camera' | 'fleet' | 'missions' | 'airspace' | 'analytics' | 'about'>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname === '/live-camera' || window.location.hash === '#/live-camera') {
+        return 'camera';
+      }
+    }
+    return 'live';
+  });
+
+  // Standalone Checkpoint Simulation Controller
+  const missionController = apiService.getController();
+  const [checkpointMission, setCheckpointMission] = useState<Mission | null>(() => missionController.getMission());
+  const [checkpointTelemetry, setCheckpointTelemetry] = useState<MissionTelemetry | null>(() => missionController.getTelemetry());
+  const [bottomTabMode, setBottomTabMode] = useState<'checkpoint' | 'detail' | 'logs'>('checkpoint');
+  const [isApiContractOpen, setIsApiContractOpen] = useState<boolean>(false);
+  const [isPx4SetupOpen, setIsPx4SetupOpen] = useState<boolean>(false);
 
   // Core state
   const [drones, setDrones] = useState<Drone[]>(INITIAL_DRONES);
@@ -119,6 +142,49 @@ export function App() {
 
     return () => clearInterval(timer);
   }, [simulationSpeed, geofences, isMuted]);
+
+
+  // URL sync for dedicated /live-camera route
+  useEffect(() => {
+    const handlePopState = () => {
+      const isCam = window.location.pathname === '/live-camera' || window.location.hash === '#/live-camera';
+      setActiveTab(isCam ? 'camera' : 'live');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Subscribe to standalone checkpoint mission controller & PX4 SITL adapter
+  useEffect(() => {
+    const unsubController = missionController.subscribe((m, t) => {
+      if (apiService.getMode() !== 'px4') {
+        setCheckpointMission({ ...m });
+        setCheckpointTelemetry({ ...t });
+      }
+    });
+
+    const px4 = apiService.getPx4Adapter();
+    const unsubPx4Tel = px4.onTelemetry((t) => {
+      if (apiService.getMode() === 'px4') {
+        setCheckpointTelemetry({ ...t });
+      }
+    });
+
+    const unsubPx4Conn = px4.onConnectionChange(() => {
+      if (apiService.getMode() === 'px4') {
+        px4.getMissionStatus('px4-current').then((m) => {
+          setCheckpointMission({ ...m });
+        });
+      }
+    });
+
+    return () => {
+      unsubController();
+      unsubPx4Tel();
+      unsubPx4Conn();
+    };
+  }, [missionController]);
+
 
   // Selected drone helper
   const selectedDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
@@ -328,6 +394,11 @@ export function App() {
         setIsMuted={setIsMuted}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onOpenReplay={() => setIsReplayModalOpen(true)}
+        onOpenApiContract={() => setIsApiContractOpen(true)}
+      />
+
+      {/* PX4 SITL & Gazebo Autopilot Integration Status Banner */}
+      <Px4SitlStatusBanner onOpenSetupGuide={() => setIsPx4SetupOpen(true)}
       />
 
       {/* Main Command Workspace */}
@@ -367,30 +438,89 @@ export function App() {
                     proposedRoute={replanData ? replanData.proposedRoute : null}
                     selectedWaypointId={selectedWaypointId}
                     onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
+                    checkpointMission={checkpointMission}
+                    checkpointTelemetry={checkpointTelemetry}
                   />
                 )}
               </div>
 
-              {/* Bottom Panel: Selected Drone Detail Panel (when selected) OR Fleet Overview Strip */}
-              {selectedDroneId && isDetailPanelOpen ? (
-                <DroneDetailPanel
-                  drone={selectedDrone}
-                  onClose={() => setIsDetailPanelOpen(false)}
-                  onPauseResume={handlePauseResume}
-                  onTriggerReplan={handleTriggerReplan}
-                  onTriggerRTB={handleTriggerRTB}
-                  onMarkComplete={handleMarkComplete}
-                  onSwitchToPOV={() => setViewMode('pov')}
-                  onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
-                  selectedWaypointId={selectedWaypointId}
-                />
-              ) : (
-                <BottomOverviewPanel
-                  drones={drones}
-                  flightLogs={flightLogs}
-                  onSelectDrone={handleSelectDrone}
-                />
-              )}
+              {/* Bottom Multi-Panel Container */}
+              <div className="flex flex-col shrink-0 border-t border-[#1e2a40] bg-[#0c101a]">
+                {/* Panel Selector Strip */}
+                <div className="flex items-center justify-between px-3 py-1 bg-[#090d17] border-b border-[#1b2538] text-xs">
+                  <div className="flex items-center gap-1 font-sans">
+                    <button
+                      onClick={() => setBottomTabMode('checkpoint')}
+                      className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all ${
+                        bottomTabMode === 'checkpoint'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                      <span>Checkpoint Showcase</span>
+                    </button>
+
+                    <button
+                      onClick={() => setBottomTabMode('detail')}
+                      className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        bottomTabMode === 'detail'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <span>Drone Vitals</span>
+                    </button>
+
+                    <button
+                      onClick={() => setBottomTabMode('logs')}
+                      className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                        bottomTabMode === 'logs'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <span>Flight Logs</span>
+                    </button>
+                  </div>
+
+                  <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono text-slate-500">
+                    <span>Active Telemetry: {checkpointTelemetry?.groundSpeedKmh || 0} km/h</span>
+                    <span>•</span>
+                    <span>Alt: {Math.round(checkpointTelemetry?.altitudeMeters || 0)}m</span>
+                  </div>
+                </div>
+
+                {/* Selected Panel Content */}
+                {bottomTabMode === 'checkpoint' && (
+                  <CheckpointMissionPanel
+                    onOpenApiContract={() => setIsApiContractOpen(true)}
+                    onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
+                  />
+                )}
+
+                {bottomTabMode === 'detail' && selectedDrone && (
+                  <DroneDetailPanel
+                    drone={selectedDrone}
+                    onClose={() => setBottomTabMode('checkpoint')}
+                    onPauseResume={handlePauseResume}
+                    onTriggerReplan={handleTriggerReplan}
+                    onTriggerRTB={handleTriggerRTB}
+                    onMarkComplete={handleMarkComplete}
+                    onSwitchToPOV={() => setViewMode('pov')}
+                    onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
+                    selectedWaypointId={selectedWaypointId}
+                  />
+                )}
+
+                {bottomTabMode === 'logs' && (
+                  <BottomOverviewPanel
+                    drones={drones}
+                    flightLogs={flightLogs}
+                    onSelectDrone={handleSelectDrone}
+                  />
+                )}
+              </div>
             </div>
 
             {/* Right Sidebar: Alerts, Airspace Conflict Radar & Mission Status */}
@@ -440,6 +570,16 @@ export function App() {
 
         {/* TAB 5: ANALYTICS & ENERGY EFFICIENCY */}
         {activeTab === 'analytics' && <AnalyticsView />}
+
+        {/* TAB 6: DEDICATED LIVE CAMERA SCREEN ROUTE (/live-camera) */}
+        {activeTab === 'camera' && (
+          <LiveCameraScreen
+            onBackToMap={() => {
+              setActiveTab('live');
+              window.history.pushState({}, '', '/');
+            }}
+          />
+        )}
       </main>
 
       {/* MODAL 1: Smart Route Replanning Modal */}
@@ -480,6 +620,16 @@ export function App() {
       {/* MODAL 4: About Aerovata by Taspora System Modal */}
       {isAboutModalOpen && (
         <AboutModal onClose={() => setIsAboutModalOpen(false)} />
+      )}
+
+      {/* MODAL 5: REST API Contract Specification Modal */}
+      {isApiContractOpen && (
+        <ApiContractModal onClose={() => setIsApiContractOpen(false)} />
+      )}
+
+      {/* MODAL 6: PX4 SITL & Gazebo Setup Guide Modal */}
+      {isPx4SetupOpen && (
+        <Px4SetupModal onClose={() => setIsPx4SetupOpen(false)} />
       )}
     </div>
   );

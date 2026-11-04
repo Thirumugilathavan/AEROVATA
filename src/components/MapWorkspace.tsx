@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import { Layers, Compass, Plus, Minus, Eye, Box, Map as MapIcon, LocateFixed } from 'lucide-react';
-import { Drone, GeofenceZone, Waypoint } from '../types/fleet';
+import { Drone, GeofenceZone, Waypoint } from '../types/fleet.ts';
+import type { Mission, MissionTelemetry, Checkpoint } from '../types/mission.ts';
 import { AIRSPACE_CENTER } from '../data/mockFleet';
 
 interface MapWorkspaceProps {
@@ -14,6 +15,9 @@ interface MapWorkspaceProps {
   proposedRoute: Waypoint[] | null;
   selectedWaypointId: string | null;
   onSelectWaypoint: (wpId: string) => void;
+  checkpointMission?: Mission | null;
+  checkpointTelemetry?: MissionTelemetry | null;
+  onSelectCheckpoint?: (checkpoint: Checkpoint) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -126,11 +130,16 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   proposedRoute,
   selectedWaypointId,
   onSelectWaypoint,
+  checkpointMission,
+  checkpointTelemetry,
+  onSelectCheckpoint,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<{ [key: string]: maplibregl.Marker }>({});
   const waypointMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const checkpointMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const simDroneMarkerRef = useRef<maplibregl.Marker | null>(null);
   const mapLoadedRef = useRef(false);
 
   const [showFlightPaths, setShowFlightPaths] = useState(true);
@@ -339,6 +348,34 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       source: 'proposed-route',
       paint: { 'line-color': '#34d399', 'line-width': 3, 'line-dasharray': [2, 1], 'line-opacity': 0.9 },
     });
+
+    // ─── Checkpoint Mission Corridor ───────────────────────────
+    map.addSource('checkpoint-corridor', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    map.addLayer({
+      id: 'checkpoint-corridor-glow',
+      type: 'line',
+      source: 'checkpoint-corridor',
+      paint: {
+        'line-color': '#00f0ff',
+        'line-width': 8,
+        'line-opacity': 0.35,
+        'line-blur': 4,
+      },
+    });
+    map.addLayer({
+      id: 'checkpoint-corridor-line',
+      type: 'line',
+      source: 'checkpoint-corridor',
+      paint: {
+        'line-color': '#00f0ff',
+        'line-width': 2.5,
+        'line-dasharray': [3, 2],
+        'line-opacity': 0.95,
+      },
+    });
   };
 
   // Update flight path GeoJSON when drones change
@@ -348,7 +385,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     const source = map.getSource('flight-paths') as maplibregl.GeoJSONSource;
     if (!source) return;
 
-    const features: maplibregl.GeoJSONSource['_data'] = {
+    const features = {
       type: 'FeatureCollection',
       features: drones.flatMap((drone) => {
         const isSelected = drone.id === selectedDroneId;
@@ -512,6 +549,199 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       waypointMarkersRef.current.push(m);
     });
   }, [drones, selectedDroneId, selectedWaypointId, showWaypoints]);
+
+  // ─── Render Checkpoint Mission Corridor & Ordered Checkpoint Markers ─────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoadedRef.current) return;
+
+    checkpointMarkersRef.current.forEach((m) => m.remove());
+    checkpointMarkersRef.current = [];
+
+    const source = map.getSource('checkpoint-corridor') as maplibregl.GeoJSONSource;
+
+    if (checkpointMission && checkpointMission.checkpoints.length > 0) {
+      if (source) {
+        source.setData({
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: checkpointMission.checkpoints.map((cp) => [cp.lng, cp.lat]),
+              },
+            },
+          ],
+        } as any);
+      }
+
+      checkpointMission.checkpoints.forEach((cp) => {
+        const isActive = cp.status === 'active';
+        const isReached = cp.status === 'reached';
+        const isError = checkpointMission.status === 'error';
+
+        const el = document.createElement('div');
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (onSelectCheckpoint) onSelectCheckpoint(cp);
+        });
+
+        const badgeColor = isError ? '#f43f5e' : isActive ? '#00f0ff' : isReached ? '#10b981' : '#64748b';
+        const bgBadge = isError ? '#881337' : isActive ? 'rgba(6,182,212,0.3)' : isReached ? 'rgba(16,185,129,0.3)' : 'rgba(30,41,59,0.9)';
+
+        el.innerHTML = `
+          <div style="display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 0 6px ${badgeColor}66);">
+            ${isActive ? `
+              <div style="
+                position: absolute;
+                width: 38px;
+                height: 38px;
+                border-radius: 50%;
+                background: rgba(0,240,255,0.2);
+                border: 1.5px solid #00f0ff;
+                animation: radar-pulse 2s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+                pointer-events: none;
+              "></div>
+            ` : ''}
+            <div style="
+              width: ${isActive ? '26px' : '22px'};
+              height: ${isActive ? '26px' : '22px'};
+              border-radius: 50%;
+              background: ${bgBadge};
+              border: 2px solid ${badgeColor};
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: #ffffff;
+              font-size: 11px;
+              font-weight: 800;
+              font-family: ui-monospace, monospace;
+              transition: all 0.25s ease;
+              box-shadow: 0 0 ${isActive ? '12px' : '6px'} ${badgeColor};
+            ">
+              ${isReached ? '✓' : cp.sequence}
+            </div>
+            <div style="
+              background: rgba(10,14,24,0.92);
+              border: 1px solid ${badgeColor};
+              border-radius: 4px;
+              padding: 2px 6px;
+              font-size: 9px;
+              font-family: monospace;
+              color: #e2e8f0;
+              margin-top: 3px;
+              white-space: nowrap;
+              backdrop-filter: blur(6px);
+              display: flex;
+              gap: 4px;
+            ">
+              <span style="font-weight: 700; color: ${badgeColor};">#${cp.sequence}</span>
+              <span>${cp.name.split(' ').slice(0, 2).join(' ')}</span>
+              <span style="color: #38bdf8;">${cp.altitudeMeters}m</span>
+            </div>
+          </div>
+        `;
+
+        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([cp.lng, cp.lat])
+          .addTo(map);
+
+        checkpointMarkersRef.current.push(marker);
+      });
+    } else {
+      if (source) {
+        source.setData({ type: 'FeatureCollection', features: [] } as any);
+      }
+    }
+  }, [checkpointMission, onSelectCheckpoint]);
+
+  // ─── Render / Animate Simulation Drone Marker ─────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!checkpointTelemetry || !checkpointMission || checkpointTelemetry.connected === false) {
+      if (simDroneMarkerRef.current) {
+        simDroneMarkerRef.current.remove();
+        simDroneMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const heading = checkpointTelemetry.headingDegrees;
+    const isPaused = checkpointMission.status === 'paused';
+    const isError = checkpointMission.status === 'error';
+    const droneColor = isError ? '#f43f5e' : isPaused ? '#fbbf24' : '#00f0ff';
+
+    if (!simDroneMarkerRef.current) {
+      const el = document.createElement('div');
+      el.style.cursor = 'pointer';
+      simDroneMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([checkpointTelemetry.lng, checkpointTelemetry.lat])
+        .addTo(map);
+    } else {
+      simDroneMarkerRef.current.setLngLat([checkpointTelemetry.lng, checkpointTelemetry.lat]);
+    }
+
+    const markerEl = simDroneMarkerRef.current.getElement();
+    markerEl.innerHTML = `
+      <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none;">
+        <div style="
+          position: absolute;
+          width: 54px;
+          height: 54px;
+          border-radius: 50%;
+          background: ${droneColor}22;
+          border: 1.5px solid ${droneColor};
+          animation: radar-pulse 1.8s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+        "></div>
+        <div style="
+          transform: rotate(${heading}deg);
+          transition: transform 0.25s linear;
+          filter: drop-shadow(0 0 8px ${droneColor});
+          z-index: 2;
+        ">
+          <svg width="36" height="36" viewBox="0 0 32 32" fill="none">
+            <line x1="16" y1="16" x2="6" y2="6" stroke="${droneColor}" stroke-width="2.2" stroke-linecap="round"/>
+            <line x1="16" y1="16" x2="26" y2="6" stroke="${droneColor}" stroke-width="2.2" stroke-linecap="round"/>
+            <line x1="16" y1="16" x2="6" y2="26" stroke="${droneColor}" stroke-width="2.2" stroke-linecap="round"/>
+            <line x1="16" y1="16" x2="26" y2="26" stroke="${droneColor}" stroke-width="2.2" stroke-linecap="round"/>
+            <circle cx="6" cy="6" r="3.5" fill="${droneColor}" fill-opacity="0.8"/>
+            <circle cx="26" cy="6" r="3.5" fill="${droneColor}" fill-opacity="0.8"/>
+            <circle cx="6" cy="26" r="3.5" fill="${droneColor}" fill-opacity="0.8"/>
+            <circle cx="26" cy="26" r="3.5" fill="${droneColor}" fill-opacity="0.8"/>
+            <ellipse cx="16" cy="16" rx="5" ry="4" fill="${droneColor}"/>
+            <circle cx="16" cy="16" r="2" fill="#ffffff"/>
+            <polygon points="16,4 18,9 14,9" fill="${droneColor}"/>
+          </svg>
+        </div>
+        <div style="
+          background: rgba(8,12,20,0.95);
+          border: 1px solid ${droneColor};
+          border-radius: 4px;
+          padding: 2px 7px;
+          font-family: monospace;
+          font-size: 10px;
+          color: #fff;
+          margin-top: 4px;
+          white-space: nowrap;
+          box-shadow: 0 0 10px rgba(0,0,0,0.7);
+          display: flex;
+          gap: 5px;
+          align-items: center;
+          z-index: 3;
+        ">
+          <span style="font-weight: 800; color: ${droneColor};">${checkpointMission.droneCallsign}</span>
+          <span>${Math.round(checkpointTelemetry.altitudeMeters)}m</span>
+          <span>${Math.round(checkpointTelemetry.groundSpeedKmh)}km/h</span>
+          ${checkpointTelemetry.isDwellActive ? '<span style="color: #fbbf24; font-weight: bold;">[DWELL]</span>' : ''}
+        </div>
+      </div>
+    `;
+  }, [checkpointTelemetry, checkpointMission]);
 
   return (
     <div className="relative flex-1 w-full h-full overflow-hidden bg-[#080b12]">

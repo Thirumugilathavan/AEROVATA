@@ -1,4 +1,4 @@
-import { Drone, AirspaceConflict, FlightLogEntry, GeofenceZone, Waypoint } from '../types/fleet';
+import type { Drone, AirspaceConflict, FlightLogEntry, GeofenceZone, Waypoint } from '../types/fleet.ts';
 
 // Helper: Haversine distance in meters
 export function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
