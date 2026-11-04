@@ -1,4 +1,5 @@
 export type DroneStatus = 
+  | 'active'
   | 'delivering'
   | 'en_route_pickup'
   | 'returning_to_base'
@@ -138,11 +139,12 @@ export interface Drone {
   lastRerouteTimestamp?: number;
   // Mission & Navigation Intelligence fields (Deterministic navigation)
   missionStartLocation?: string;
+  missionOriginName?: string;
   missionStartCoords?: [number, number];
   missionDestinationName?: string;
   missionDestinationCoords?: [number, number];
   routeVersion?: number;
-  routeStatus?: 'FOLLOWING_SAFE_ROUTE' | 'A_STAR_REROUTED' | 'SAFE_HOLD' | 'MISSION_COMPLETED' | 'NO_SAFE_ROUTE';
+  routeStatus?: 'FOLLOWING_SAFE_ROUTE' | 'A_STAR_REROUTED' | 'SAFE_HOLD' | 'MISSION_COMPLETED' | 'NO_SAFE_ROUTE' | 'ON_COURSE';
   distanceRemainingKm?: number;
   etaSecondsRemaining?: number;
   nextWaypointName?: string;
@@ -150,12 +152,16 @@ export interface Drone {
 }
 
 export interface RouteComparisonParameter {
-  name: string;
-  originalValue: string | number;
-  alternativeValue: string | number;
+  name?: string;
+  parameter?: string;
+  originalValue?: string | number;
+  originalRouteValue?: string | number;
+  alternativeValue?: string | number;
+  alternativeRouteValue?: string | number;
   delta?: string | number;
-  status: 'OPTIMAL' | 'EQUAL' | 'SUBOPTIMAL' | 'REJECTED';
-  explanation: string;
+  status: 'OPTIMAL' | 'EQUAL' | 'SUBOPTIMAL' | 'REJECTED' | 'ACCEPTABLE' | 'CLEAR' | 'FEASIBLE' | 'WARNING';
+  explanation?: string;
+  details?: string;
 }
 
 export interface ReplanResult {

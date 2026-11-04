@@ -34,6 +34,7 @@ import {
 } from './data/mockFleet';
 import { 
   Drone, 
+  DroneStatus,
   GeofenceZone, 
   AirspaceAlert, 
   FlightLogEntry, 
@@ -139,9 +140,9 @@ export function App() {
         setCheckpointTelemetry({ ...t });
 
         // Priority 2: Directly drive the vehicle from genuine PX4 SITL MAVLink telemetry
-        setDrones((prevDrones) => {
+        setDrones((prevDrones: Drone[]): Drone[] => {
           const targetId = t.droneId || 'AV-01';
-          return prevDrones.map((d) => {
+          return prevDrones.map((d): Drone => {
             if (d.id === targetId) {
               return {
                 ...d,
@@ -155,10 +156,10 @@ export function App() {
                   verticalSpeedMs: t.verticalSpeedMs || 0,
                   batteryPercentage: t.batteryPercentage,
                   batteryVoltage: t.batteryVoltage || 24.8,
-                  satellitesVisible: t.satellites || 18,
-                  gpsFixType: t.rtkFix || 'RTK_FIX',
+                  satellites: t.satellites || 18,
+                  gpsFix: (t.rtkFix || 'RTK_FIX') as 'RTK_FIX' | '3D_FIX' | 'DGPS' | 'SEARCHING',
                 },
-                status: t.missionStatus === 'running' ? 'en_route_pickup' : t.missionStatus === 'paused' ? 'hovering' : 'active',
+                status: (t.missionStatus === 'running' ? 'en_route_pickup' : t.missionStatus === 'paused' ? 'hovering' : 'active') as DroneStatus,
               };
             }
             return d;

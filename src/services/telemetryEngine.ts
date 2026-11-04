@@ -266,7 +266,7 @@ export function updateSimulationTick(
   const newNotifications: NotificationItem[] = [];
   const baseCoord = { lat: 11.0025, lng: 76.9665 }; // CMCH Coimbatore Master Hub
 
-  const updatedDrones = drones.map((drone) => {
+  const updatedDrones: Drone[] = drones.map((drone): Drone => {
     // If vehicle is actively driven by genuine PX4 SITL MAVLink telemetry, preserve state
     if (px4ControlledDroneIds && px4ControlledDroneIds.has(drone.id)) {
       return drone;
