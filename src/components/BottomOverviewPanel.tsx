@@ -4,9 +4,9 @@ import {
   Battery, 
   ArrowRight, 
   CheckCircle2, 
-  Radio, 
-  Plane
+  Radio 
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone, FlightLogEntry } from '../types/fleet';
 
 interface BottomOverviewPanelProps {
@@ -131,7 +131,7 @@ export const BottomOverviewPanel: React.FC<BottomOverviewPanelProps> = ({
             className="flex flex-col items-center cursor-pointer group"
           >
             <div className="w-9 h-9 rounded-full bg-cyan-950 border border-cyan-400 flex items-center justify-center text-cyan-300 text-sm font-mono font-bold group-hover:scale-105 transition-transform shadow-[0_0_10px_rgba(6,182,212,0.4)]">
-              ✈
+              <QuadcopterIcon className="w-5 h-5 text-cyan-300" />
             </div>
             <div className="text-xs font-bold font-mono text-slate-200 mt-1">DRONE 01</div>
             <div className="text-[10px] font-mono text-cyan-400">KMCH Leg</div>

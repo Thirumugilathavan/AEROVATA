@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "jiti ./src/controller/controller.test.ts && jiti ./src/services/px4/coordinateTransform.test.ts",
+    "test": "jiti ./src/controller/controller.test.ts && jiti ./src/services/px4/coordinateTransform.test.ts && jiti ./src/services/droneAStarRouter.test.ts",
     "lint": "oxlint",
     "preview": "vite preview"
   },

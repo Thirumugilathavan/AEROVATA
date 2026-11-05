@@ -277,6 +277,11 @@ export function updateSimulationTick(
       return drone;
     }
 
+    // Standby / Idle drone holding on departure pad
+    if (drone.status === 'standby') {
+      return drone;
+    }
+
     // Charging drone simulation
     if (drone.status === 'charging') {
       const newBat = Math.min(100, drone.vitals.batteryPercentage + 0.1 * deltaSeconds);
@@ -368,7 +373,8 @@ export function updateSimulationTick(
       nextWp.lng
     );
 
-    const speedMs = (drone.vitals.groundSpeedKmh * 1000) / 3600;
+    const currentSpeedKmh = drone.vitals.groundSpeedKmh > 5 ? drone.vitals.groundSpeedKmh : 48.0;
+    const speedMs = (currentSpeedKmh * 1000) / 3600;
     const stepDistance = speedMs * deltaSeconds;
 
     let newLat = drone.vitals.latitude;
@@ -579,12 +585,8 @@ export function updateSimulationTick(
         if (!updatedDrone.originalRoute || updatedDrone.originalRoute.length === 0) {
           updatedDrone.originalRoute = [...drone.route];
         }
-
-        // Store past completed waypoints
         const completed = updatedRoute.slice(0, newWpIndex).filter((w) => w.status === 'completed');
         updatedDrone.completedRouteWaypoints = completed;
-
-        // Replace upcoming route with calculated A* clearance route
         updatedDrone.route = replan.proposedRoute;
         updatedDrone.currentWaypointIndex = 0;
         updatedDrone.isRerouting = true;
@@ -592,6 +594,9 @@ export function updateSimulationTick(
         updatedDrone.rerouteReason = conflictReason;
         updatedDrone.lastRerouteTimestamp = Date.now();
         updatedDrone.routeVersion = (updatedDrone.routeVersion || 1) + 1;
+        if (replan.candidates) {
+          updatedDrone.routeCandidates = replan.candidates;
+        }
 
         const timeStr = new Date().toTimeString().split(' ')[0];
         newLogs.push({
@@ -599,14 +604,14 @@ export function updateSimulationTick(
           timestamp: timeStr,
           droneId: drone.id,
           droneCallsign: drone.callsign,
-          event: `A* Autonomous Reroute: ${conflictReason}. Continuous safe corridor established (+${replan.addedDistanceKm} km).`,
+          event: `A* Autonomous Reroute: ${conflictReason}. Continuous safe corridor established (+${replan.addedDistanceKm} km, ${replan.proposedRoute.length} checkpoints).`,
           type: 'warning',
         });
 
         newNotifications.push({
           id: `notif-astar-${Date.now()}-${drone.id}`,
           title: `A* DECONFLICTION REROUTE: ${drone.callsign}`,
-          description: `${conflictReason}. 3D A* deconfliction calculated. Destination locked: ${drone.missionDestinationName || 'Mission Pad'}. New Distance: ${replan.alternativeDistanceKm}km (+${replan.addedDistanceKm}km, +${replan.addedDelayMinutes}m).`,
+          description: `${conflictReason}. Continuous safe corridor established. Destination locked: ${drone.missionDestinationName || 'Mission Pad'}. New Distance: ${replan.alternativeDistanceKm}km (+${replan.addedDistanceKm}km, +${replan.addedDelayMinutes}m).`,
           timestamp: timeStr,
           severity: 'warning',
           category: 'restricted',
@@ -615,6 +620,34 @@ export function updateSimulationTick(
           read: false,
           acknowledged: false,
           actionRequired: 'A* Safe Corridor Active',
+        });
+      } else if (!replan.success) {
+        // Hard safety constraint: If route becomes invalid and no alternative is available, pause simulation!
+        updatedDrone.isPaused = true;
+        updatedDrone.routeStatus = 'NO_SAFE_ROUTE';
+        updatedDrone.status = 'hovering';
+        updatedDrone.statusLabel = 'HOLD: NO SAFE CORRIDOR TO DESTINATION';
+        const timeStr = new Date().toTimeString().split(' ')[0];
+        newLogs.push({
+          id: `log-blocked-${Date.now()}-${drone.id}`,
+          timestamp: timeStr,
+          droneId: drone.id,
+          droneCallsign: drone.callsign,
+          event: `EMERGENCY HOLD: ${replan.reason}. Simulation paused for flight safety.`,
+          type: 'critical',
+        });
+        newNotifications.push({
+          id: `notif-blocked-${Date.now()}-${drone.id}`,
+          title: `SIMULATION PAUSED: ${drone.callsign}`,
+          description: `No valid corridor can be found to destination avoiding restricted airspace. Aircraft entered hover hold.`,
+          timestamp: timeStr,
+          severity: 'critical',
+          category: 'restricted',
+          droneId: drone.id,
+          droneCallsign: drone.callsign,
+          read: false,
+          acknowledged: false,
+          actionRequired: 'Manual Destination Reassignment Required',
         });
       }
     }

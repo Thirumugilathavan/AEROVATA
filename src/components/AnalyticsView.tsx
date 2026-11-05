@@ -6,9 +6,9 @@ import {
   Clock, 
   CheckCircle2, 
   AlertTriangle,
-  Battery,
-  Plane
+  Battery
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 
 export const AnalyticsView: React.FC = () => {
   return (
@@ -31,7 +31,7 @@ export const AnalyticsView: React.FC = () => {
         <div className="bg-[#101626] border border-[#1f2c45] p-4 rounded-lg">
           <div className="text-xs text-slate-400 uppercase font-bold flex items-center justify-between">
             <span>Fleet Utilization</span>
-            <Plane className="w-4 h-4 text-cyan-400" />
+            <QuadcopterIcon className="w-4 h-4 text-cyan-400" />
           </div>
           <div className="text-2xl font-extrabold text-white mt-2">83.3%</div>
           <div className="text-[10px] text-emerald-400 mt-1">5 of 6 Airframes Active / In Mission</div>

@@ -149,6 +149,12 @@ export interface Drone {
   etaSecondsRemaining?: number;
   nextWaypointName?: string;
   targetHeadingDegrees?: number;
+  routeCandidates?: RouteCandidate[];
+  selectedCandidateId?: string;
+  checkpointSpacingMeters?: number;
+  configuredCruiseAltitudeMeters?: number;
+  routeValidationStatus?: RouteValidationStatus;
+  routeValidationDetails?: RouteValidationResult;
 }
 
 export interface RouteComparisonParameter {
@@ -303,4 +309,46 @@ export interface NotificationItem {
     obstacleName?: string;
     batteryLevel?: number;
   };
+}
+
+// ─── Adaptive Route Planning & Multi-Alternative Evaluation Types ────────────
+export type RouteValidationStatus = 'VALIDATED' | 'UNVERIFIED_DATA' | 'RESTRICTED' | 'BLOCKED';
+
+export interface RegulatoryAltitudeConfig {
+  frameworkName: string;
+  jurisdiction: string;
+  lastVerificationDate: string;
+  sourceUrl?: string;
+  maxPermittedGreenZoneAltMeters: number;
+  maxPermittedYellowZoneAltMeters: number;
+  mandatorySeparationBufferMeters: number;
+  status: 'VERIFIED_OFFICIAL' | 'SIMULATION_ESTIMATE' | 'UNVERIFIED';
+  disclaimer: string;
+}
+
+export interface RouteValidationResult {
+  isValid: boolean;
+  status: RouteValidationStatus;
+  reasons: string[];
+  warnings: string[];
+  minObstacleClearanceMeters: number;
+  minVerticalClearanceMeters: number;
+  intersectedZones: { zoneId: string; zoneName: string; classification: string }[];
+  regulatoryReference?: RegulatoryAltitudeConfig;
+}
+
+export interface RouteCandidate {
+  id: string;
+  name: string;
+  description: string;
+  coordinates: [number, number][];
+  waypoints: Waypoint[];
+  distanceKm: number;
+  simulatedMinutes: number;
+  checkpointCount: number;
+  validation: RouteValidationResult;
+  isRecommended: boolean;
+  recommendationReason: string;
+  strategy: 'optimal' | 'arterial' | 'perimeter';
+  color: string;
 }

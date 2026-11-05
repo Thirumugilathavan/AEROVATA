@@ -8,9 +8,9 @@ import {
   Clock, 
   SlidersHorizontal,
   Compass,
-  Battery,
-  Plane
+  Battery
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone } from '../types/fleet';
 
 interface MissionReplayModalProps {
@@ -84,7 +84,7 @@ export const MissionReplayModal: React.FC<MissionReplayModalProps> = ({ drone, o
                 className="absolute w-6 h-6 -ml-3 rounded-full bg-cyan-400 border-2 border-white shadow-[0_0_12px_rgba(6,182,212,0.8)] flex items-center justify-center transition-all duration-75"
                 style={{ left: `${progress}%` }}
               >
-                <Plane className="w-3.5 h-3.5 text-slate-950" />
+                <QuadcopterIcon className="w-3.5 h-3.5 text-slate-950" />
               </div>
             </div>
 

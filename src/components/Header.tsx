@@ -8,12 +8,12 @@ import {
   Compass,
   Layers,
   BarChart3,
-  Plane,
   Info,
   Video,
   Code,
   Cpu
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { AirspaceAlert, NotificationItem } from '../types/fleet';
 
 interface HeaderProps {
@@ -103,7 +103,7 @@ export const Header: React.FC<HeaderProps> = ({
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
-            <Plane className="w-3.5 h-3.5" />
+            <QuadcopterIcon className="w-3.5 h-3.5" />
             Fleet
           </button>
 

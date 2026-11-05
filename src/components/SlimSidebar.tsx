@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   LayoutDashboard,
-  Plane,
   Route,
   PackageCheck,
   Bell,
@@ -12,6 +11,7 @@ import {
   AlertTriangle,
   Activity,
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone, AirspaceAlert } from '../types/fleet';
 
 interface SlimSidebarProps {
@@ -71,7 +71,7 @@ const getDroneStatusLabel = (status: string) => {
 
 const NAV_ITEMS = [
   { id: 'live', icon: LayoutDashboard, label: 'Live Ops', desc: 'Real-time fleet operations' },
-  { id: 'fleet', icon: Plane, label: 'Fleet', desc: 'Drone registry & specs' },
+  { id: 'fleet', icon: QuadcopterIcon, label: 'Fleet', desc: 'Drone registry & specs' },
   { id: 'missions', icon: PackageCheck, label: 'Missions', desc: 'Delivery manifests' },
   { id: 'airspace', icon: Layers, label: 'Airspace', desc: 'UTM & geofence zones' },
   { id: 'analytics', icon: BarChart3, label: 'Analytics', desc: 'Performance metrics' },

@@ -68,6 +68,9 @@ interface MapWorkspaceProps {
   checkpointMission?: Mission | null;
   checkpointTelemetry?: MissionTelemetry | null;
   onSelectCheckpoint?: (checkpoint: Checkpoint) => void;
+  isMapPickingDestination?: boolean;
+  onMapPickDestination?: (coords: [number, number]) => void;
+  tempDestinationCoords?: [number, number] | null;
 }
 
 const DRONE_THEME_COLORS: Record<string, string> = {
@@ -77,13 +80,25 @@ const DRONE_THEME_COLORS: Record<string, string> = {
   'AV-04': '#10b981', // Emerald - UTM Airspace Patrol
 };
 
+const DRONE_COLOR_PALETTE = [
+  '#00f0ff', // Cyan
+  '#818cf8', // Indigo
+  '#f59e0b', // Amber
+  '#10b981', // Emerald
+  '#ec4899', // Pink
+  '#38bdf8', // Sky
+  '#a855f7', // Purple
+  '#14b8a6', // Teal
+];
+
 // High-Fidelity 3D Drone Model Generator (Hexacopter, Quadcopter, Octocopter, Patrol Scout)
 const buildMarkerHtml = (
   drone: Drone, 
   isSelected: boolean, 
-  activeConflict: ObstacleConflict | null
+  activeConflict: ObstacleConflict | null,
+  customColor?: string
 ): string => {
-  const baseColor = DRONE_THEME_COLORS[drone.id] || '#00f0ff';
+  const baseColor = customColor || DRONE_THEME_COLORS[drone.id] || '#00f0ff';
   const heading = drone.vitals.headingDegrees;
   const bat = Math.round(drone.vitals.batteryPercentage);
   const alt = Math.round(drone.vitals.altitudeMeters);
@@ -450,6 +465,9 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   checkpointMission,
   checkpointTelemetry,
   onSelectCheckpoint,
+  isMapPickingDestination = false,
+  onMapPickDestination,
+  tempDestinationCoords,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -459,6 +477,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
   const destinationMarkersRef = useRef<{ [key: string]: maplibregl.Marker }>({});
   const checkpointMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const tempDestMarkerRef = useRef<maplibregl.Marker | null>(null);
   const simDroneMarkerRef = useRef<maplibregl.Marker | null>(null);
   const prevSelectedDroneIdRef = useRef<string | null>(null);
 
@@ -493,36 +512,58 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
+    // OpenFreeMap vector tile & style endpoints
+    const OFM_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> Data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
+
     const initialStyle: maplibregl.StyleSpecification = {
       version: 8,
       sources: {
+        'openfreemap': {
+          type: 'vector',
+          url: 'https://tiles.openfreemap.org/planet',
+          tiles: [
+            'https://tiles.openfreemap.org/planet/20261101_080013_pt/{z}/{x}/{y}.pbf'
+          ],
+          minzoom: 0,
+          maxzoom: 14,
+          attribution: OFM_ATTRIBUTION,
+        },
+        'openfreemap-buildings': {
+          type: 'vector',
+          url: 'https://tiles.openfreemap.org/planet',
+          tiles: [
+            'https://tiles.openfreemap.org/planet/20261101_080013_pt/{z}/{x}/{y}.pbf'
+          ],
+          minzoom: 0,
+          maxzoom: 14,
+          attribution: OFM_ATTRIBUTION,
+        },
         'esri-satellite': {
           type: 'raster',
           tiles: [
             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          attribution: '',
+          attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics',
           maxzoom: 19,
-        },
-        'openfreemap-buildings': {
-          type: 'vector',
-          tiles: [
-            'https://tiles.openfreemap.org/planet/20261101_080013_pt/{z}/{x}/{y}.pbf'
-          ],
-          minzoom: 0,
-          maxzoom: 14,
         },
       },
       layers: [
+        {
+          id: 'background',
+          type: 'background',
+          paint: {
+            'background-color': '#080b12',
+          },
+        },
         {
           id: 'satellite-tiles',
           type: 'raster',
           source: 'esri-satellite',
           paint: {
-            'raster-opacity': 0.76,
-            'raster-contrast': 0.20,
-            'raster-brightness-min': 0.08,
+            'raster-opacity': mapStyle === 'satellite' ? 0.78 : 0.0,
+            'raster-contrast': 0.18,
+            'raster-brightness-min': 0.06,
           },
         },
       ],
@@ -533,7 +574,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       container: mapContainerRef.current,
       style: initialStyle,
       center: [76.9780, 11.0160], // Core urban corridor (Gandhipuram - Avinashi Rd)
-      zoom: 13.8,
+      zoom: 14.8, // Set initial zoom so 3D buildings are immediately visible
       pitch: viewMode === '3d' ? 62 : 0,
       bearing: viewMode === '3d' ? -25 : 0,
       maxPitch: 78,
@@ -613,8 +654,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     const map = mapRef.current;
     if (!map || !isMapLoaded) return;
     if (map.getLayer('satellite-tiles')) {
-      map.setPaintProperty('satellite-tiles', 'raster-opacity', mapStyle === 'satellite' ? 0.88 : 0.22);
-      map.setPaintProperty('satellite-tiles', 'raster-contrast', mapStyle === 'satellite' ? 0.12 : -0.2);
+      map.setPaintProperty('satellite-tiles', 'raster-opacity', mapStyle === 'satellite' ? 0.78 : 0.0);
+      map.setPaintProperty('satellite-tiles', 'raster-contrast', mapStyle === 'satellite' ? 0.18 : -0.2);
     }
   }, [mapStyle, isMapLoaded]);
 
@@ -811,14 +852,15 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       });
     }
 
-    // ─── 2. Road Network Styling Hierarchy (Req 4) ────────────────
-    if (!map.getLayer('roads-local') && map.getSource('openfreemap-buildings')) {
+    // ─── 2. Road Network Styling Hierarchy (OpenFreeMap Vector) ───
+    const vectorSourceId = map.getSource('openfreemap') ? 'openfreemap' : 'openfreemap-buildings';
+    if (!map.getLayer('roads-local') && map.getSource(vectorSourceId)) {
       try {
         // Local Roads: Muted slate grey #64748B
         map.addLayer({
           id: 'roads-local',
           type: 'line',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'transportation',
           filter: ['in', 'class', 'minor', 'service', 'street'],
           paint: {
@@ -832,7 +874,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         map.addLayer({
           id: 'roads-secondary',
           type: 'line',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'transportation',
           filter: ['in', 'class', 'secondary', 'tertiary'],
           paint: {
@@ -846,7 +888,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         map.addLayer({
           id: 'roads-primary',
           type: 'line',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'transportation',
           filter: ['==', 'class', 'primary'],
           paint: {
@@ -860,7 +902,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         map.addLayer({
           id: 'roads-highway-casing',
           type: 'line',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'transportation',
           filter: ['in', 'class', 'motorway', 'trunk'],
           paint: {
@@ -873,7 +915,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         map.addLayer({
           id: 'roads-highway',
           type: 'line',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'transportation',
           filter: ['in', 'class', 'motorway', 'trunk'],
           paint: {
@@ -887,37 +929,45 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       }
     }
 
-    // ─── 3. OpenStreetMap 3D Citywide Building Extrusions ─────────
+    // ─── 3. OpenFreeMap 3D Real Extruded Buildings (Actual Heights) ───
     try {
-      if (!map.getLayer('osm-buildings-3d') && map.getSource('openfreemap-buildings')) {
+      if (!map.getLayer('osm-buildings-3d') && map.getSource(vectorSourceId)) {
         map.addLayer({
           id: 'osm-buildings-3d',
           type: 'fill-extrusion',
-          source: 'openfreemap-buildings',
+          source: vectorSourceId,
           'source-layer': 'building',
           minzoom: 12.0,
+          filter: ['!=', ['get', 'hide_3d'], true],
           paint: {
+            // Tactical aerospace height color gradient
             'fill-extrusion-color': [
               'interpolate',
               ['linear'],
-              ['coalesce', ['get', 'render_height'], ['*', ['get', 'render_levels'], 4.5], 25],
-              0, '#0284c7',
-              25, '#0ea5e9',
-              50, '#38bdf8',
-              80, '#00f0ff'
+              ['coalesce', ['get', 'render_height'], 14],
+              0, '#0f172a',
+              12, '#0369a1',
+              25, '#0284c7',
+              45, '#0ea5e9',
+              70, '#38bdf8',
+              100, '#00f0ff'
             ],
+            // Use actual mapped heights from OpenFreeMap vector tiles (render_height in meters).
+            // Reasonable fallback of 14m (~4 storeys) only when height is missing.
             'fill-extrusion-height': [
-              '*',
-              [
-                'case',
-                ['has', 'render_height'], ['get', 'render_height'],
-                ['has', 'render_levels'], ['*', ['get', 'render_levels'], 6.0],
-                28
-              ],
-              4.0
+              'case',
+              ['has', 'render_height'],
+              ['max', 3.5, ['get', 'render_height']],
+              14.0
             ],
-            'fill-extrusion-base': 0,
-            'fill-extrusion-opacity': 0.95,
+            // Base altitude offset for cantilevered and rooftop structures
+            'fill-extrusion-base': [
+              'case',
+              ['has', 'render_min_height'],
+              ['get', 'render_min_height'],
+              0
+            ],
+            'fill-extrusion-opacity': 0.88,
           },
         });
       }
@@ -1042,6 +1092,20 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         },
       });
 
+      // Alternative Candidate Routes (Requirement 4)
+      map.addLayer({
+        id: 'flight-routes-alternative',
+        type: 'line',
+        source: 'flight-routes',
+        filter: ['==', ['get', 'type'], 'alternative'],
+        paint: {
+          'line-color': ['coalesce', ['get', 'color'], '#818cf8'],
+          'line-width': 2.4,
+          'line-dasharray': [3, 2],
+          'line-opacity': 0.70,
+        },
+      });
+
       // Upcoming planned route
       map.addLayer({
         id: 'flight-routes-planned',
@@ -1163,9 +1227,9 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
     const features: any[] = [];
 
-    drones.forEach((drone) => {
+    drones.forEach((drone, idx) => {
       const isSelected = drone.id === selectedDroneId;
-      const themeColor = DRONE_THEME_COLORS[drone.id] || '#00f0ff';
+      const themeColor = DRONE_THEME_COLORS[drone.id] || DRONE_COLOR_PALETTE[idx % DRONE_COLOR_PALETTE.length];
       const color = isSelected ? '#00f0ff' : themeColor;
       const lineWidth = isSelected ? 5.5 : 2.0;
       const lineOpacity = isSelected ? 1.0 : 0.35;
@@ -1191,6 +1255,27 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             type: 'LineString',
             coordinates: drone.route.map((wp) => [wp.lng, wp.lat]),
           },
+        });
+      }
+
+      // 2B. Alternative candidate routes (for selected drone, or all drones)
+      if (isSelected && drone.routeCandidates && drone.routeCandidates.length > 1) {
+        drone.routeCandidates.forEach((cand) => {
+          if (cand.id !== drone.selectedCandidateId && cand.waypoints.length >= 2) {
+            features.push({
+              type: 'Feature',
+              properties: {
+                color: cand.color || '#818cf8',
+                type: 'alternative',
+                candidateId: cand.id,
+                candidateName: cand.name,
+              },
+              geometry: {
+                type: 'LineString',
+                coordinates: cand.waypoints.map((wp) => [wp.lng, wp.lat]),
+              },
+            });
+          }
         });
       }
 
@@ -1245,16 +1330,26 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     const map = mapRef.current;
     if (!map || !isMapLoaded) return;
 
-    drones.forEach((drone) => {
+    // Clean up markers for removed drones
+    const currentDroneIds = new Set(drones.map((d) => d.id));
+    Object.keys(markersRef.current).forEach((id) => {
+      if (!currentDroneIds.has(id)) {
+        markersRef.current[id].remove();
+        delete markersRef.current[id];
+      }
+    });
+
+    drones.forEach((drone, idx) => {
       const isSelected = drone.id === selectedDroneId;
       const activeConflict = obstacleConflicts.find((c) => c.droneId === drone.id) || null;
+      const themeColor = DRONE_THEME_COLORS[drone.id] || DRONE_COLOR_PALETTE[idx % DRONE_COLOR_PALETTE.length];
 
       let marker = markersRef.current[drone.id];
 
       if (!marker) {
         const el = document.createElement('div');
         el.className = 'drone-marker-container';
-        el.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict);
+        el.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict, themeColor);
 
         el.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1272,7 +1367,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       } else {
         const markerElement = marker.getElement();
         marker.setLngLat([drone.vitals.longitude, drone.vitals.latitude]);
-        markerElement.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict);
+        markerElement.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict, themeColor);
       }
     });
   }, [drones, selectedDroneId, obstacleConflicts, isMapLoaded, onSelectDrone]);
@@ -1367,105 +1462,169 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       let bgStyle = 'rgba(10, 16, 28, 0.94)';
       let pulseRing = '';
 
-      if (isReached) {
-        borderStyle = '1.5px solid #10b981';
-        bgStyle = 'rgba(6, 28, 18, 0.92)';
-        statusBadge = `<span style="background: #10b981; color: #021a10; font-size: 8px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">✓ PASSED</span>`;
-      } else if (isCurrentLeg) {
-        borderStyle = '2px solid #00f0ff';
-        bgStyle = 'rgba(8, 28, 45, 0.96)';
-        statusBadge = `<span style="background: #00f0ff; color: #020611; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 1s infinite;">▶ NEXT TARGET (${distToWp}m)</span>`;
-        pulseRing = `
-          <div style="
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 72px;
-            height: 72px;
-            margin-top: -36px;
-            margin-left: -36px;
-            border-radius: 50%;
-            border: 2px solid #00f0ff;
-            background: rgba(0, 240, 255, 0.15);
-            box-shadow: 0 0 16px #00f0ff;
-            animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
-            pointer-events: none;
-            z-index: 0;
-          "></div>
-        `;
-      } else if (isDestination) {
-        borderStyle = '2px solid #f43f5e';
-        bgStyle = 'rgba(38, 10, 22, 0.94)';
-        statusBadge = `<span style="background: #f43f5e; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">DESTINATION</span>`;
-      } else {
-        borderStyle = '1.5px solid #24344d';
-        bgStyle = 'rgba(12, 17, 28, 0.92)';
-        statusBadge = `<span style="background: #1e293b; color: #94a3b8; font-size: 8px; font-weight: 700; padding: 1px 3px; border-radius: 2px;">UPCOMING</span>`;
-      }
-
-      el.innerHTML = `
-        <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
-          ${pulseRing}
+      if (isReached && !isSelected) {
+        // Compact PASSED Checkpoint Dot (clutter-reduction)
+        el.innerHTML = `
           <div style="
             position: relative;
-            z-index: 2;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+          " title="${wp.name} [PASSED] • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
+            <div style="
+              width: 14px;
+              height: 14px;
+              border-radius: 50%;
+              background: #10b981;
+              border: 1.5px solid #064e3b;
+              box-shadow: 0 0 8px rgba(16,185,129,0.5);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: #022c1b;
+              font-size: 8px;
+              font-weight: 900;
+              font-family: monospace;
+            ">✓</div>
+          </div>
+        `;
+      } else if (!isCurrentLeg && !isDestination && !isSelected) {
+        // Upcoming Transit Checkpoint (Tactical Compact Pill Badge)
+        el.innerHTML = `
+          <div style="
+            position: relative;
+            transform: translate(-50%, -50%);
             display: flex;
             flex-direction: column;
-            background: ${bgStyle};
-            border: ${borderStyle};
-            padding: 3px 7px;
-            border-radius: 5px;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px #00f0ff' : isCurrentLeg ? '0 0 14px rgba(0,240,255,0.5)' : 'none'};
-            min-width: 110px;
-            max-width: 190px;
-            backdrop-filter: blur(8px);
-            transition: all 0.2s ease;
-          ">
-            <!-- Header: WP Number & Status -->
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 2px;">
-              <span style="
-                color: ${isReached ? '#34d399' : isCurrentLeg ? '#00f0ff' : '#38bdf8'};
-                font-family: ui-monospace, SFMono-Regular, monospace;
-                font-size: 10px;
-                font-weight: 900;
-              ">
-                WP-${wpNumber}
-              </span>
-              ${statusBadge}
-            </div>
-
-            <!-- Body: Waypoint Label / Name -->
-            <div style="
-              color: #ffffff;
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              font-size: 10px;
-              font-weight: 700;
-              margin-top: 2px;
-              line-height: 1.25;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-            " title="${wp.name}">
-              ${wp.name}
-            </div>
-
-            <!-- Footer: Altitude clearance & type -->
+            align-items: center;
+            cursor: pointer;
+            transition: transform 0.15s ease;
+          " title="${wp.name} • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
             <div style="
               display: flex;
               align-items: center;
-              justify-content: space-between;
-              margin-top: 2px;
-              padding-top: 2px;
-              font-family: ui-monospace, monospace;
-              font-size: 9px;
-              color: #94a3b8;
+              gap: 3px;
+              background: rgba(12, 17, 28, 0.94);
+              border: 1.5px solid #38bdf8;
+              padding: 1.5px 5px;
+              border-radius: 10px;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.8);
+              backdrop-filter: blur(4px);
             ">
-              <span style="color: #38bdf8; font-weight: 700;">Alt: ${wp.altitudeMeters}m AGL</span>
-              <span style="text-transform: uppercase; font-size: 8px;">${wp.type}</span>
+              <span style="
+                color: #38bdf8;
+                font-family: ui-monospace, SFMono-Regular, monospace;
+                font-size: 9px;
+                font-weight: 800;
+              ">${wpNumber}</span>
+              <span style="
+                color: #94a3b8;
+                font-family: ui-monospace, monospace;
+                font-size: 8px;
+                font-weight: 600;
+              ">${wp.altitudeMeters}m</span>
             </div>
           </div>
-        </div>
-      `;
+        `;
+      } else {
+        if (isReached) {
+          borderStyle = '1.5px solid #10b981';
+          bgStyle = 'rgba(6, 28, 18, 0.92)';
+          statusBadge = `<span style="background: #10b981; color: #021a10; font-size: 8px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">✓ PASSED</span>`;
+        } else if (isCurrentLeg) {
+          borderStyle = '2px solid #00f0ff';
+          bgStyle = 'rgba(8, 28, 45, 0.96)';
+          statusBadge = `<span style="background: #00f0ff; color: #020611; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 1s infinite;">▶ NEXT TARGET (${distToWp}m)</span>`;
+          pulseRing = `
+            <div style="
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              width: 72px;
+              height: 72px;
+              margin-top: -36px;
+              margin-left: -36px;
+              border-radius: 50%;
+              border: 2px solid #00f0ff;
+              background: rgba(0, 240, 255, 0.15);
+              box-shadow: 0 0 16px #00f0ff;
+              animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+              pointer-events: none;
+              z-index: 0;
+            "></div>
+          `;
+        } else if (isDestination) {
+          borderStyle = '2px solid #f43f5e';
+          bgStyle = 'rgba(38, 10, 22, 0.94)';
+          statusBadge = `<span style="background: #f43f5e; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">DESTINATION</span>`;
+        }
+
+        el.innerHTML = `
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
+            ${pulseRing}
+            <div style="
+              position: relative;
+              z-index: 2;
+              display: flex;
+              flex-direction: column;
+              background: ${bgStyle};
+              border: ${borderStyle};
+              padding: 3px 7px;
+              border-radius: 5px;
+              box-shadow: 0 4px 14px rgba(0,0,0,0.85), ${isSelected ? '0 0 16px #00f0ff' : isCurrentLeg ? '0 0 14px rgba(0,240,255,0.5)' : 'none'};
+              min-width: 110px;
+              max-width: 190px;
+              backdrop-filter: blur(8px);
+              transition: all 0.2s ease;
+            ">
+              <!-- Header: WP Number & Status -->
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 2px;">
+                <span style="
+                  color: ${isReached ? '#34d399' : isCurrentLeg ? '#00f0ff' : '#38bdf8'};
+                  font-family: ui-monospace, SFMono-Regular, monospace;
+                  font-size: 10px;
+                  font-weight: 900;
+                ">
+                  WP-${wpNumber}
+                </span>
+                ${statusBadge}
+              </div>
+
+              <!-- Body: Waypoint Label / Name -->
+              <div style="
+                color: #ffffff;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 10px;
+                font-weight: 700;
+                margin-top: 2px;
+                line-height: 1.25;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              " title="${wp.name}">
+                ${wp.name}
+              </div>
+
+              <!-- Footer: Altitude clearance & type -->
+              <div style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-top: 2px;
+                padding-top: 2px;
+                font-family: ui-monospace, monospace;
+                font-size: 9px;
+                color: #94a3b8;
+              ">
+                <span style="color: #38bdf8; font-weight: 700;">Alt: ${wp.altitudeMeters}m AGL</span>
+                <span style="text-transform: uppercase; font-size: 8px;">${wp.type}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
 
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1498,7 +1657,16 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       return;
     }
 
-    drones.forEach((drone) => {
+    // Clean up destination markers for removed drones
+    const currentDroneIds = new Set(drones.map((d) => d.id));
+    Object.keys(destinationMarkersRef.current).forEach((id) => {
+      if (!currentDroneIds.has(id)) {
+        destinationMarkersRef.current[id].remove();
+        delete destinationMarkersRef.current[id];
+      }
+    });
+
+    drones.forEach((drone, idx) => {
       const destCoords = drone.missionDestinationCoords || (
         drone.route.find((w) => w.type === 'delivery')?.lng ? [
           drone.route.find((w) => w.type === 'delivery')!.lng,
@@ -1509,7 +1677,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
       let marker = destinationMarkersRef.current[drone.id];
       const isSelected = drone.id === selectedDroneId;
-      const color = isSelected ? '#00f0ff' : (DRONE_THEME_COLORS[drone.id] || '#00f0ff');
+      const color = isSelected ? '#00f0ff' : (DRONE_THEME_COLORS[drone.id] || DRONE_COLOR_PALETTE[idx % DRONE_COLOR_PALETTE.length]);
       const destName = drone.missionDestinationName || 'Mission Pad';
       const dist = drone.distanceRemainingKm !== undefined ? `${drone.distanceRemainingKm} km` : '';
       const eta = drone.etaSecondsRemaining !== undefined ? `${Math.ceil(drone.etaSecondsRemaining / 60)}m` : '';
@@ -1604,6 +1772,92 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       }
     });
   }, [drones, selectedDroneId, layerDestinations, isMapLoaded, onSelectDrone]);
+
+  // Interactive Map-Click Destination Picking Handler
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapLoaded) return;
+
+    if (!isMapPickingDestination) {
+      map.getCanvas().style.cursor = '';
+      return;
+    }
+
+    map.getCanvas().style.cursor = 'crosshair';
+
+    const handleMapClick = (e: maplibregl.MapMouseEvent) => {
+      if (!isMapPickingDestination || !onMapPickDestination) return;
+      const { lng, lat } = e.lngLat;
+      onMapPickDestination([lng, lat]);
+    };
+
+    map.on('click', handleMapClick);
+
+    return () => {
+      map.off('click', handleMapClick);
+      map.getCanvas().style.cursor = '';
+    };
+  }, [isMapPickingDestination, isMapLoaded, onMapPickDestination]);
+
+  // Temporary Destination Preview Marker (when picking or configured)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapLoaded) return;
+
+    if (!tempDestinationCoords) {
+      if (tempDestMarkerRef.current) {
+        tempDestMarkerRef.current.remove();
+        tempDestMarkerRef.current = null;
+      }
+      return;
+    }
+
+    if (!tempDestMarkerRef.current) {
+      const el = document.createElement('div');
+      el.className = 'temp-destination-pin';
+      el.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none; transform: translate(-50%, -100%); position: relative;">
+          <div style="
+            position: absolute;
+            bottom: 0;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 2px solid #00f0ff;
+            background: rgba(0, 240, 255, 0.25);
+            animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+          "></div>
+          <div style="
+            background: rgba(12, 18, 30, 0.96);
+            border: 2px solid #00f0ff;
+            border-radius: 4px;
+            padding: 3px 8px;
+            color: #00f0ff;
+            font-family: ui-monospace, monospace;
+            font-size: 10px;
+            font-weight: 800;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.8), 0 0 12px rgba(0,240,255,0.6);
+            white-space: nowrap;
+            margin-bottom: 3px;
+          ">
+            📍 PICKED DESTINATION
+          </div>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#00f0ff" stroke="#000000" stroke-width="1.5">
+            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+            <circle cx="12" cy="9" r="2.5" fill="#000000"/>
+          </svg>
+        </div>
+      `;
+      tempDestMarkerRef.current = new maplibregl.Marker({
+        element: el,
+        anchor: 'bottom',
+      })
+        .setLngLat([tempDestinationCoords[0], tempDestinationCoords[1]])
+        .addTo(map);
+    } else {
+      tempDestMarkerRef.current.setLngLat([tempDestinationCoords[0], tempDestinationCoords[1]]);
+    }
+  }, [tempDestinationCoords, isMapLoaded]);
 
   // === RENDER CHECKPOINT MISSION CORRIDOR & CHECKPOINT MARKERS ===
   useEffect(() => {
@@ -2186,20 +2440,22 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
                 <span className="text-[10px] text-slate-400 font-bold uppercase">Basemap Theme:</span>
                 <div className="flex gap-1">
                   <button
-                    onClick={() => setMapStyle('satellite')}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      mapStyle === 'satellite' ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                    onClick={() => setMapStyle('dark')}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                      mapStyle === 'dark' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'
                     }`}
+                    title="OpenFreeMap 3D Vector Basemap with Citywide Extrusions"
                   >
-                    Satellite
+                    OpenFreeMap 3D
                   </button>
                   <button
-                    onClick={() => setMapStyle('dark')}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      mapStyle === 'dark' ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-slate-400'
+                    onClick={() => setMapStyle('satellite')}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                      mapStyle === 'satellite' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'
                     }`}
+                    title="High-Resolution Satellite Imagery with 3D Buildings Overlay"
                   >
-                    Dark HUD
+                    Satellite 3D
                   </button>
                 </div>
               </div>
@@ -2435,6 +2691,21 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           <Navigation className={`w-3 h-3 ${autoFollow ? 'text-cyan-400' : 'text-slate-500'}`} />
           <span>FOLLOW</span>
         </button>
+      </div>
+
+      {/* ─── BOTTOM RIGHT: OPENFREEMAP & OPENSTREETMAP ATTRIBUTION (Requirement 4) ─── */}
+      <div className="absolute bottom-2 right-2 z-10 bg-[#080b12]/80 backdrop-blur-sm border border-[#1f2a40]/60 px-2 py-0.5 rounded text-[10px] font-mono text-slate-400 select-none pointer-events-auto flex items-center gap-1.5">
+        <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">
+          OpenFreeMap
+        </a>
+        <span className="text-slate-600">|</span>
+        <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer" className="hover:underline">
+          &copy; OpenMapTiles
+        </a>
+        <span className="text-slate-600">|</span>
+        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="hover:underline">
+          Data &copy; OpenStreetMap
+        </a>
       </div>
     </div>
   );

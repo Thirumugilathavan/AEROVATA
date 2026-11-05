@@ -1,3 +1,4 @@
+import { calculateDroneMultiRoute } from './droneAStarRouter';
 // 3D A* Intelligent Autonomous Pathfinding Engine
 // Solves: Continuous 3D Line Segment Traversability + 3D Obstacle Avoidance + Official Airspace Constraints (Red/Yellow/Green Zones)
 // Coordinate System: Local Metric Projection (Meters relative to Airspace Center)
@@ -8,7 +9,8 @@ import {
   OfficialAirspaceZone, 
   Drone, 
   ReplanResult,
-  RouteComparisonParameter 
+  RouteComparisonParameter,
+  RouteCandidate
 } from '../types/fleet';
 import { AIRSPACE_CENTER } from '../data/mockFleet';
 import { isPointInZone, isAltitudeInZoneLimits } from '../data/officialAirspaceData';
@@ -455,90 +457,63 @@ export function calculateAStarReroute(
   zones: OfficialAirspaceZone[],
   allDrones: Drone[],
   conflictReason: string
-): ReplanResult {
-  const currentPos: [number, number, number] = [
+): ReplanResult & { candidates?: RouteCandidate[] } {
+  const currentPos: [number, number] = [
     drone.vitals.longitude,
     drone.vitals.latitude,
-    drone.vitals.altitudeMeters,
   ];
 
-  // Destination waypoint: locked to mission destination
   const destCoords = drone.missionDestinationCoords || [76.9665, 11.0025];
   const destName = drone.missionDestinationName || 'Mission Destination';
-  const destAlt = 45;
-  const goalPos: [number, number, number] = [destCoords[0], destCoords[1], destAlt];
+  const startName = drone.missionStartLocation || `${drone.callsign} Current Fix`;
 
-  // Run 3D A*
-  const result = runAStar3D(currentPos, goalPos, drone, obstacles, zones, allDrones);
-
-  if (!result.success || result.path.length <= 1) {
-    // Generate intelligent safety detour vector around restricted perimeter
-    const [cx, cy, cz] = geoToMetric(currentPos[0], currentPos[1], currentPos[2]);
-    const [tx, ty, tz] = geoToMetric(goalPos[0], goalPos[1], goalPos[2]);
-    const midX = (cx + tx) / 2;
-    const midY = (cy + ty) / 2;
-    const dx = tx - cx;
-    const dy = ty - cy;
-    const len = Math.hypot(dx, dy) || 1;
-    const perpX = (-dy / len) * 450;
-    const perpY = (dx / len) * 450;
-    const detourAlt = Math.max(cz, tz, 75);
-
-    const [dLng, dLat] = metricToGeo(midX + perpX, midY + perpY, detourAlt);
-    result.path = [currentPos, [dLng, dLat, detourAlt], goalPos];
-    result.success = true;
-  }
-
-  // Smooth the A* path
-  const smoothed = smoothPath3D(result.path, drone, obstacles, zones, allDrones);
-
-  // Convert smoothed points to Waypoint sequence
-  const newWaypoints: Waypoint[] = smoothed.map((pt, idx) => {
-    const isFirst = idx === 0;
-    const isLast = idx === smoothed.length - 1;
-    return {
-      id: isFirst ? `cur-${drone.id}` : isLast ? `dest-${drone.id}` : `astar-${drone.id}-wp${idx}`,
-      name: isFirst ? `Current Fix (${drone.callsign})` :
-             isLast ? `${destName} (Destination)` :
-             `A* Safe Corridor WP${idx} (${Math.round(pt[2])}m AGL)`,
-      lat: pt[1],
-      lng: pt[0],
-      altitudeMeters: Math.round(pt[2]),
-      type: isLast ? 'delivery' : (isFirst ? 'base' : 'transit'),
-      status: isFirst ? 'active' : 'upcoming',
-      etaMinutes: Math.max(1, Math.round(idx * 1.8)),
-    };
+  const multiRes = calculateDroneMultiRoute(currentPos, destCoords, {
+    startName,
+    destName,
+    cruiseAltMeters: drone.vitals.altitudeMeters || 65,
+    safetyMarginMeters: 35,
+    checkpointSpacingMeters: drone.checkpointSpacingMeters || 100,
+    obstacles,
+    airspaceZones: zones,
   });
 
-  // Calculate distances
-  let altDistMeters = 0;
-  for (let i = 0; i < smoothed.length - 1; i++) {
-    const [x1, y1, z1] = geoToMetric(smoothed[i][0], smoothed[i][1], smoothed[i][2]);
-    const [x2, y2, z2] = geoToMetric(smoothed[i + 1][0], smoothed[i + 1][1], smoothed[i + 1][2]);
-    altDistMeters += Math.hypot(x2 - x1, y2 - y1, z2 - z1);
+  if (!multiRes.success || !multiRes.primaryRoute) {
+    return {
+      success: false,
+      proposedRoute: [],
+      originalDistanceKm: drone.distanceRemainingKm || 0,
+      alternativeDistanceKm: 0,
+      addedDistanceKm: 0,
+      addedDelayMinutes: 0,
+      status: 'NO_SAFE_ROUTE',
+      reason: multiRes.error || `No collision-free corridor can avoid restricted zones and obstacles to ${destName}.`,
+      conflictType: conflictReason.includes('RED') ? 'RED_ZONE' :
+                    conflictReason.includes('YELLOW') ? 'YELLOW_ZONE' : 'OBSTACLE_COLLISION',
+      evaluatedNodesCount: multiRes.evaluatedNodesCount || 0,
+      pathClearanceMarginMeters: 0,
+      flightFeasibility: {
+        batteryRequiredPercent: 0,
+        sufficientReserve: false,
+      },
+      candidates: [],
+    };
   }
 
-  // Original remaining distance to goal
-  const [gx1, gy1, gz1] = geoToMetric(currentPos[0], currentPos[1], currentPos[2]);
-  const [gx2, gy2, gz2] = geoToMetric(goalPos[0], goalPos[1], goalPos[2]);
-  const origDistMeters = Math.hypot(gx2 - gx1, gy2 - gy1, gz2 - gz1);
-
-  const origDistanceKm = Math.round((origDistMeters / 1000) * 100) / 100;
-  const altDistanceKm = Math.round((altDistMeters / 1000) * 100) / 100;
-  const addedDistanceKm = Math.max(0, Math.round((altDistanceKm - origDistanceKm) * 100) / 100);
-  const avgSpeedKmh = Math.max(35, drone.vitals.groundSpeedKmh);
+  const primary = multiRes.primaryRoute;
+  const origDistanceKm = drone.distanceRemainingKm || primary.distanceKm;
+  const altDistanceKm = primary.distanceKm;
+  const addedDistanceKm = Math.max(0, parseFloat((altDistanceKm - origDistanceKm).toFixed(2)));
+  const avgSpeedKmh = Math.max(35, drone.vitals.groundSpeedKmh || 48);
   const origFlightTimeMin = Math.round((origDistanceKm / avgSpeedKmh) * 60 * 10) / 10;
-  const altFlightTimeMin = Math.round((altDistanceKm / avgSpeedKmh) * 60 * 10) / 10;
+  const altFlightTimeMin = primary.simulatedMinutes;
   const addedDelayMinutes = Math.max(0, Math.round((altFlightTimeMin - origFlightTimeMin) * 10) / 10);
 
-  // Battery feasibility
   const burnRate = drone.vitals.energyBurnRateWhPerKm || 18.0;
   const energyRequiredWh = altDistanceKm * burnRate;
   const batteryPercentNeeded = Math.round((energyRequiredWh / 240) * 100);
   const remainingAfterFlight = drone.vitals.batteryPercentage - batteryPercentNeeded;
   const sufficientReserve = remainingAfterFlight >= 15;
 
-  // Comparison Table (Requirement: Route alternatives comparison table)
   const comparisonTable: RouteComparisonParameter[] = [
     {
       parameter: 'Total Flight Distance',
@@ -546,37 +521,37 @@ export function calculateAStarReroute(
       alternativeRouteValue: `${altDistanceKm} km`,
       delta: addedDistanceKm === 0 ? '0 km' : `+${addedDistanceKm} km`,
       status: addedDistanceKm < 1.5 ? 'OPTIMAL' : 'ACCEPTABLE',
-      details: 'Calculated along safe 3D obstacle-cleared corridor',
+      details: primary.recommendationReason,
     },
     {
-      parameter: 'Estimated Flight Time',
+      parameter: 'Simulated Flight Time',
       originalRouteValue: `${origFlightTimeMin} min`,
       alternativeRouteValue: `${altFlightTimeMin} min`,
       delta: addedDelayMinutes === 0 ? '0 min' : `+${addedDelayMinutes} min`,
       status: addedDelayMinutes < 2.0 ? 'OPTIMAL' : 'ACCEPTABLE',
-      details: `Cruise ground speed maintained at ${Math.round(avgSpeedKmh)} km/h`,
+      details: `Simulated estimate at ${Math.round(avgSpeedKmh)} km/h cruise`,
     },
     {
-      parameter: 'Airspace & Obstacle Threats',
-      originalRouteValue: `1 Conflict (${conflictReason.slice(0, 32)})`,
-      alternativeRouteValue: '0 Conflicts (100% Deconflicted)',
+      parameter: 'Airspace & Obstacle Clearance',
+      originalRouteValue: `1 Conflict (${conflictReason.slice(0, 28)})`,
+      alternativeRouteValue: `0 Conflicts (Min Clearance: ${primary.validation.minObstacleClearanceMeters}m)`,
       delta: '-1 Threat Resolved',
       status: 'CLEAR',
-      details: 'Strict vertical and lateral clearance envelope satisfied',
+      details: 'Strict vertical and horizontal clearance buffer satisfied',
     },
     {
-      parameter: 'Energy Feasibility & Reserve',
-      originalRouteValue: `${Math.round(drone.vitals.batteryPercentage)}% Capacity`,
-      alternativeRouteValue: `${batteryPercentNeeded}% Req (${Math.round(remainingAfterFlight)}% Reserve)`,
-      delta: sufficientReserve ? `+${Math.round(remainingAfterFlight - 15)}% Margin` : '-Tight Reserve',
-      status: sufficientReserve ? 'FEASIBLE' : 'WARNING',
-      details: `Calculated burn rate: ${burnRate} Wh/km`,
+      parameter: 'Checkpoints & Curvature',
+      originalRouteValue: `${drone.route.length} Checkpoints`,
+      alternativeRouteValue: `${primary.checkpointCount} Predicted Checkpoints`,
+      delta: `+${Math.max(0, primary.checkpointCount - drone.route.length)} Waypoints`,
+      status: 'OPTIMAL',
+      details: 'Intelligently spaced adaptive predicted checkpoints along cleared path',
     },
   ];
 
   return {
     success: true,
-    proposedRoute: newWaypoints,
+    proposedRoute: primary.waypoints,
     originalDistanceKm: origDistanceKm,
     alternativeDistanceKm: altDistanceKm,
     addedDistanceKm,
@@ -585,12 +560,13 @@ export function calculateAStarReroute(
     reason: conflictReason,
     conflictType: conflictReason.includes('RED') ? 'RED_ZONE' :
                   conflictReason.includes('YELLOW') ? 'YELLOW_ZONE' : 'OBSTACLE_COLLISION',
-    evaluatedNodesCount: result.evaluatedCount,
-    pathClearanceMarginMeters: 35,
+    evaluatedNodesCount: multiRes.evaluatedNodesCount || 100,
+    pathClearanceMarginMeters: primary.validation.minObstacleClearanceMeters,
     flightFeasibility: {
       batteryRequiredPercent: batteryPercentNeeded,
       sufficientReserve,
     },
     comparisonTable,
+    candidates: multiRes.allCandidates,
   };
 }

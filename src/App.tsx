@@ -22,6 +22,7 @@ import { ApiContractModal } from './components/ApiContractModal';
 import { Px4SitlStatusBanner } from './components/Px4SitlStatusBanner';
 import { Px4SetupModal } from './components/Px4SetupModal';
 import { BottomMissionBar } from './components/BottomMissionBar';
+import { AddDroneModal } from './components/AddDroneModal';
 import { apiService } from './services/api/index';
 import type { Mission, MissionTelemetry } from './types/mission';
 import { Navigation, X } from 'lucide-react';
@@ -81,9 +82,12 @@ export function App() {
   const [isBottomBarHidden, setIsBottomBarHidden] = useState<boolean>(false);
   const [autoFollow, setAutoFollow] = useState<boolean>(false);
 
-  // Core Simulation & Fleet state (Coimbatore, Tamil Nadu)
-  const [drones, setDrones] = useState<Drone[]>(INITIAL_DRONES);
-  const [selectedDroneId, setSelectedDroneId] = useState<string | null>('AV-01');
+  // Core Simulation & Fleet state (Zero drones on initial startup - Requirement 2)
+  const [drones, setDrones] = useState<Drone[]>([]);
+  const [selectedDroneId, setSelectedDroneId] = useState<string | null>(null);
+  const [isAddDroneModalOpen, setIsAddDroneModalOpen] = useState<boolean>(false);
+  const [isMapPickingDestination, setIsMapPickingDestination] = useState<boolean>(false);
+  const [mapPickedDestination, setMapPickedDestination] = useState<[number, number] | null>(null);
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
   const [geofences, setGeofences] = useState<GeofenceZone[]>(INITIAL_GEOFENCES);
   const [officialAirspaceZones, setOfficialAirspaceZones] = useState<OfficialAirspaceZone[]>(OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
@@ -241,15 +245,66 @@ export function App() {
     return () => clearInterval(timer);
   }, [isSimRunning, simulationSpeed, geofences, obstacles, officialAirspaceZones]);
 
-  // Selected drone helper
-  const selectedDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
-  const selectedDroneConflict = obstacleConflicts.find((c) => c.droneId === selectedDrone?.id) || null;
+  // Selected drone helper (safely handles zero drones on startup)
+  const selectedDrone = drones.find((d) => d.id === selectedDroneId) || drones[0] || null;
+  const selectedDroneConflict = selectedDrone ? (obstacleConflicts.find((c) => c.droneId === selectedDrone.id) || null) : null;
 
   // Handler: Select Drone
   const handleSelectDrone = (id: string) => {
     setSelectedDroneId(id);
     setIsDetailPanelOpen(true);
     setSelectedWaypointId(null);
+  };
+
+  // Handler: Add Drone to Fleet (Dynamic Fleet Management - Requirement 2 & 3)
+  const handleAddDrone = (newDrone: Drone) => {
+    setDrones((prev) => [...prev, newDrone]);
+    setSelectedDroneId(newDrone.id);
+    setMapPickedDestination(null);
+    setIsMapPickingDestination(false);
+    const timeStr = new Date().toTimeString().split(' ')[0];
+    setFlightLogs((logs) => [
+      {
+        id: `log-add-${Date.now()}`,
+        timestamp: timeStr,
+        droneId: newDrone.id,
+        droneCallsign: newDrone.callsign,
+        event: `COMMISSIONED: ${newDrone.callsign} (${newDrone.model}) added to fleet. A* corridor locked from ${newDrone.missionStartLocation} to ${newDrone.missionDestinationName} (${newDrone.distanceRemainingKm} km).`,
+        type: 'info',
+      },
+      ...logs,
+    ]);
+  };
+
+  // Handler: Remove Drone from Fleet with Cleanup (Requirement 2)
+  const handleRemoveDrone = (droneId: string) => {
+    const target = drones.find((d) => d.id === droneId);
+    setDrones((prev) => prev.filter((d) => d.id !== droneId));
+    if (selectedDroneId === droneId) {
+      const remaining = drones.filter((d) => d.id !== droneId);
+      setSelectedDroneId(remaining.length > 0 ? remaining[0].id : null);
+    }
+    if (target) {
+      const timeStr = new Date().toTimeString().split(' ')[0];
+      setFlightLogs((logs) => [
+        {
+          id: `log-rm-${Date.now()}`,
+          timestamp: timeStr,
+          droneId: target.id,
+          droneCallsign: target.callsign,
+          event: `DECOMMISSIONED: ${target.callsign} (${target.id}) removed from fleet. Airframe markers, corridor, and telemetry cleared.`,
+          type: 'warning',
+        },
+        ...logs,
+      ]);
+    }
+  };
+
+  // Handler: Map Click Destination Capture (Requirement 3)
+  const handleMapPickDestination = (coords: [number, number]) => {
+    setMapPickedDestination(coords);
+    setIsAddDroneModalOpen(true);
+    setIsMapPickingDestination(false);
   };
 
   // Handler: Pause / Resume Mission for individual drone
@@ -277,13 +332,48 @@ export function App() {
     );
   };
 
-  // Handler: Reset Simulation (Req 8.C)
+  // Handler: Reset Simulation (Resets active drones to departure pad)
   const handleResetSimulation = () => {
-    setDrones(INITIAL_DRONES);
-    setFlightLogs(INITIAL_FLIGHT_LOGS);
+    setDrones((prev) =>
+      prev.map((d) => {
+        const startCoords = d.missionStartCoords || (d.route[0] ? [d.route[0].lng, d.route[0].lat] : [76.9665, 11.0025]);
+        return {
+          ...d,
+          currentWaypointIndex: 0,
+          status: 'active',
+          statusLabel: 'Ready for Autonomous Transit',
+          isPaused: false,
+          routeStatus: 'ON_COURSE',
+          flightTrail: [startCoords as [number, number]],
+          vitals: {
+            ...d.vitals,
+            latitude: startCoords[1],
+            longitude: startCoords[0],
+            altitudeMeters: 0,
+            groundSpeedKmh: 0,
+            headingDegrees: 0,
+            batteryPercentage: 100,
+          },
+          route: d.route.map((wp, idx) => ({
+            ...wp,
+            status: idx === 0 ? 'completed' : 'upcoming',
+          })),
+        };
+      })
+    );
+    setFlightLogs((logs) => [
+      {
+        id: `log-reset-${Date.now()}`,
+        timestamp: new Date().toTimeString().split(' ')[0],
+        droneId: 'FLEET',
+        droneCallsign: 'FLEET',
+        event: 'SIMULATION RESET: All active aircraft repositioned at departure pads. Waypoints reset to 0.',
+        type: 'info',
+      },
+      ...logs,
+    ]);
     setConflicts([]);
     setObstacleConflicts([]);
-    setSelectedDroneId('AV-01');
     setSelectedWaypointId(null);
   };
 
@@ -341,6 +431,39 @@ export function App() {
     );
 
     setReplanData(null);
+  };
+
+  // Handler: Select Route Alternative Candidate (Requirement 4 & 5)
+  const handleSelectCandidateRoute = (droneId: string, candidateId: string) => {
+    setDrones((prev) =>
+      prev.map((d) => {
+        if (d.id !== droneId || !d.routeCandidates) return d;
+        const cand = d.routeCandidates.find((c) => c.id === candidateId);
+        if (!cand) return d;
+
+        const timeStr = new Date().toTimeString().split(' ')[0];
+        setFlightLogs((logs) => [
+          {
+            id: `log-cand-${Date.now()}`,
+            timestamp: timeStr,
+            droneId: d.id,
+            droneCallsign: d.callsign,
+            event: `TRAJECTORY SWITCH: Active route switched to '${cand.name}' (${cand.distanceKm} km, ${cand.checkpointCount} CPs)`,
+            type: 'info',
+          },
+          ...logs,
+        ]);
+
+        return {
+          ...d,
+          selectedCandidateId: cand.id,
+          route: cand.waypoints,
+          currentWaypointIndex: 0,
+          totalFlightDistanceKm: cand.distanceKm,
+          estimatedFlightMinutes: cand.simulatedMinutes,
+        };
+      })
+    );
   };
 
   // Handler: Return to Base (RTB)
@@ -509,6 +632,8 @@ export function App() {
               obstacleConflicts={obstacleConflicts}
               isExpanded={isLeftFleetOpen}
               onToggleExpand={setIsLeftFleetOpen}
+              onOpenAddDrone={() => setIsAddDroneModalOpen(true)}
+              onRemoveDrone={handleRemoveDrone}
             />
 
             {/* Column 2: Central Geospatial Workspace (Dominant Map Viewport: 85-88% of screen) */}
@@ -542,6 +667,9 @@ export function App() {
                     onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
                     checkpointMission={checkpointMission}
                     checkpointTelemetry={checkpointTelemetry}
+                    isMapPickingDestination={isMapPickingDestination}
+                    onMapPickDestination={handleMapPickDestination}
+                    tempDestinationCoords={mapPickedDestination}
                   />
                 )}
 
@@ -578,6 +706,7 @@ export function App() {
                           onSelectWaypoint={(wpId) => setSelectedWaypointId(wpId)}
                           selectedWaypointId={selectedWaypointId}
                           activeConflict={selectedDroneConflict}
+                          onSelectCandidateRoute={handleSelectCandidateRoute}
                         />
                       )}
 
@@ -657,6 +786,8 @@ export function App() {
               handleSelectDrone(id);
               setActiveTab('live');
             }}
+            onOpenAddDrone={() => setIsAddDroneModalOpen(true)}
+            onRemoveDrone={handleRemoveDrone}
           />
         )}
 
@@ -768,6 +899,23 @@ export function App() {
       {isPx4SetupOpen && (
         <Px4SetupModal onClose={() => setIsPx4SetupOpen(false)} />
       )}
+
+      {/* MODAL 7: Dynamic Add Drone & A* Route Modal */}
+      <AddDroneModal
+        isOpen={isAddDroneModalOpen}
+        onClose={() => {
+          setIsAddDroneModalOpen(false);
+          setIsMapPickingDestination(false);
+        }}
+        onAddDrone={handleAddDrone}
+        existingDrones={drones}
+        mapPickedCoords={mapPickedDestination}
+        onStartMapPickMode={() => {
+          setIsAddDroneModalOpen(false);
+          setIsMapPickingDestination(true);
+        }}
+        isMapPickingActive={isMapPickingDestination}
+      />
     </div>
   );
 }

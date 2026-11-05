@@ -36,9 +36,9 @@ import {
   Moon,
   Flame,
   ZoomIn,
-  ZoomOut,
-  Plane
+  ZoomOut
 } from 'lucide-react';
+import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import type { Mission, MissionTelemetry, CameraConnectionStatus } from '../types/mission';
 import type { Drone } from '../types/fleet';
 import { apiService } from '../services/api/index';
@@ -475,7 +475,7 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
               <div className="bg-[#0b101c]/85 backdrop-blur-md border border-cyan-500/30 rounded p-3 text-xs min-w-[210px] shadow-lg">
                 <div className="flex items-center justify-between mb-1.5 pb-1 border-b border-cyan-900/40">
                   <div className="text-[10px] text-cyan-400 uppercase tracking-widest font-bold flex items-center gap-1.5">
-                    <Plane className="w-3 h-3 text-cyan-400" />
+                    <QuadcopterIcon className="w-3.5 h-3.5 text-cyan-400" />
                     <span>{activeDroneCallsign}</span>
                   </div>
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">

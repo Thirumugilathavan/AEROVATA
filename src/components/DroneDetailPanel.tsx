@@ -39,6 +39,7 @@ interface DroneDetailPanelProps {
   onSelectWaypoint: (wpId: string) => void;
   selectedWaypointId: string | null;
   activeConflict?: ObstacleConflict | null;
+  onSelectCandidateRoute?: (droneId: string, candidateId: string) => void;
 }
 
 export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
@@ -52,6 +53,7 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
   onSelectWaypoint,
   selectedWaypointId,
   activeConflict,
+  onSelectCandidateRoute,
 }) => {
   const [activeTab, setActiveTab] = useState<'vitals' | 'obstacles' | 'airspace' | 'delivery' | 'waypoints' | 'controls'>('waypoints');
 
@@ -542,7 +544,119 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
 
         {/* SECTION E: ROUTE INTELLIGENCE & DETERMINISTIC NAVIGATION */}
         {activeTab === 'waypoints' && (
-          <div className="flex flex-col gap-3 h-full">
+          <div className="flex flex-col gap-3 h-full overflow-y-auto custom-scrollbar">
+            {/* NEXT PREDICTED WAYPOINT HUD CARD (Requirement 6) */}
+            {(() => {
+              const currentIdx = drone.currentWaypointIndex;
+              const nextIdx = Math.min(drone.route.length - 1, currentIdx + 1);
+              const nextWp = drone.route[nextIdx] || drone.route[0];
+              const remainingCount = Math.max(0, drone.route.length - 1 - currentIdx);
+
+              const dLat = nextWp ? nextWp.lat - drone.vitals.latitude : 0;
+              const dLng = nextWp ? nextWp.lng - drone.vitals.longitude : 0;
+              const distToNextMeters = Math.round(Math.hypot(dLat * 111000, dLng * 111000 * Math.cos((drone.vitals.latitude * Math.PI) / 180)));
+
+              const valStatus = drone.routeValidationStatus || (drone.routeStatus === 'NO_SAFE_ROUTE' ? 'BLOCKED' : 'VALIDATED');
+              const valBadgeColor = valStatus === 'BLOCKED' ? 'bg-rose-950 text-rose-300 border-rose-700' :
+                                    valStatus === 'RESTRICTED' ? 'bg-amber-950 text-amber-300 border-amber-700' :
+                                    valStatus === 'UNVERIFIED_DATA' ? 'bg-yellow-950 text-yellow-300 border-yellow-700' :
+                                    'bg-emerald-950 text-emerald-300 border-emerald-700';
+
+              return (
+                <div className="p-3 bg-[#0d1527] border border-cyan-500/50 rounded-lg shadow-lg shrink-0 font-mono">
+                  <div className="flex items-center justify-between pb-2 border-b border-cyan-900/60 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+                      <span className="font-extrabold text-white tracking-wider uppercase">
+                        NEXT PREDICTED WAYPOINT • CP-{String(nextIdx + 1).padStart(2, '0')} / {drone.route.length}
+                      </span>
+                    </div>
+                    <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded border uppercase ${valBadgeColor}`}>
+                      {valStatus === 'VALIDATED' ? '✓ VALIDATED (SIMULATION)' : valStatus}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2.5 text-xs">
+                    <div className="bg-[#121c33] p-2 rounded border border-[#1d2d4f]">
+                      <div className="text-[9px] text-slate-400 uppercase">Target Checkpoint</div>
+                      <div className="font-bold text-white truncate" title={nextWp?.name}>
+                        {nextWp?.name || 'Destination'}
+                      </div>
+                    </div>
+
+                    <div className="bg-[#121c33] p-2 rounded border border-[#1d2d4f]">
+                      <div className="text-[9px] text-slate-400 uppercase">Coordinates</div>
+                      <div className="font-bold text-cyan-300">
+                        {nextWp?.lat.toFixed(4)}°N, {nextWp?.lng.toFixed(4)}°E
+                      </div>
+                    </div>
+
+                    <div className="bg-[#121c33] p-2 rounded border border-[#1d2d4f]">
+                      <div className="text-[9px] text-slate-400 uppercase">Simulated Altitude</div>
+                      <div className="font-bold text-emerald-400 flex items-center justify-between">
+                        <span>{nextWp?.altitudeMeters ?? drone.configuredCruiseAltitudeMeters ?? 65} m AGL</span>
+                        <span className="text-[9px] text-slate-500">(Floor: 0m)</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#121c33] p-2 rounded border border-[#1d2d4f]">
+                      <div className="text-[9px] text-slate-400 uppercase">Leg Dist &amp; Remainder</div>
+                      <div className="font-bold text-amber-300">
+                        {distToNextMeters}m ({remainingCount} CP left)
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ROUTE ALTERNATIVES SELECTOR (Requirement 4) */}
+            {drone.routeCandidates && drone.routeCandidates.length > 1 && (
+              <div className="p-2.5 bg-[#0e1628] border border-[#203050] rounded-lg shrink-0 font-mono">
+                <div className="flex items-center justify-between mb-2 text-xs">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold flex items-center gap-1.5">
+                    <Route className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Calculated Route Alternatives ({drone.routeCandidates.length} Candidates)</span>
+                  </span>
+                  <span className="text-[9px] text-slate-500 italic">Click an option to switch active trajectory</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  {drone.routeCandidates.map((cand) => {
+                    const isActive = cand.id === drone.selectedCandidateId || cand.waypoints.length === drone.route.length;
+                    return (
+                      <button
+                        key={cand.id}
+                        type="button"
+                        onClick={() => onSelectCandidateRoute && onSelectCandidateRoute(drone.id, cand.id)}
+                        className={`p-2 rounded text-left border transition-all ${
+                          isActive
+                            ? 'bg-cyan-950/80 border-cyan-400 text-white shadow-[0_0_12px_rgba(0,240,255,0.25)]'
+                            : 'bg-[#121a2d] border-[#1d2a45] text-slate-300 hover:border-slate-500 hover:bg-[#16223b]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="font-bold text-[11px] truncate flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cand.color }} />
+                            <span className="truncate">{cand.name}</span>
+                          </span>
+                          {cand.isRecommended && (
+                            <span className="text-[8px] bg-cyan-900 text-cyan-300 px-1 rounded font-bold shrink-0">
+                              REC
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                          <span>{cand.distanceKm} km</span>
+                          <span>~{cand.simulatedMinutes}m</span>
+                          <span>{cand.checkpointCount} CP</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Top Bar: Origin -> Destination Banner with Status & Metrics */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5 shrink-0 bg-[#111726] p-2.5 rounded-lg border border-[#202e48]">
               {/* Origin -> Destination */}
