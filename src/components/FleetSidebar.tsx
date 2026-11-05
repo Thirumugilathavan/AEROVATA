@@ -16,6 +16,7 @@ import {
   Crosshair
 } from 'lucide-react';
 import { Drone, DroneStatus, ObstacleConflict } from '../types/fleet';
+import { formatWaypointDistance, getWaypointStatusBadge } from '../services/telemetryEngine';
 
 interface FleetSidebarProps {
   drones: Drone[];
@@ -327,8 +328,8 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
                   </div>
 
                   {/* Mission Target & Next WP */}
-                  <div className="text-[10px] font-mono mb-1.5 px-2 py-1 rounded bg-[#0b101c] border border-cyan-900/40">
-                    <div className="flex items-center justify-between text-slate-300 mb-0.5">
+                  <div className="text-[10px] font-mono mb-1.5 px-2 py-1.5 rounded bg-[#0b101c] border border-cyan-900/40">
+                    <div className="flex items-center justify-between text-slate-300 mb-1">
                       <div className="flex items-center gap-1 truncate">
                         <Navigation className="w-3 h-3 text-cyan-400 shrink-0" />
                         <span className="font-bold text-cyan-200 truncate" title={drone.missionDestinationName || 'Destination Pad'}>
@@ -336,18 +337,38 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
                         </span>
                       </div>
                       {drone.distanceRemainingKm !== undefined && (
-                        <span className="text-cyan-300 font-bold shrink-0 ml-1">
-                          {drone.distanceRemainingKm.toFixed(1)} km
+                        <span className="text-slate-300 font-bold shrink-0 ml-1 text-[9px]">
+                          Tot: {drone.distanceRemainingKm.toFixed(1)} km
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center justify-between text-cyan-300 pt-0.5 border-t border-[#1b253b]">
-                      <span className="truncate" title={drone.nextWaypointName || 'Approaching Corridor'}>
+
+                    {/* Next Waypoint Name & Target Index */}
+                    <div className="flex items-center justify-between text-cyan-300 pt-1 border-t border-[#1b253b]">
+                      <span className="truncate max-w-[130px]" title={drone.nextWaypointName || 'Approaching Corridor'}>
                         Next: {drone.nextWaypointName || 'Approaching Corridor'}
                       </span>
                       <span className="text-cyan-400 font-bold shrink-0 ml-1">
-                        WP-{(drone.currentWaypointIndex + 1).toString().padStart(2, '0')}
+                        WP-{(drone.targetWaypointIndex !== undefined ? drone.targetWaypointIndex + 1 : (drone.currentWaypointIndex === 0 && drone.route && drone.route.length > 1 ? 2 : drone.currentWaypointIndex + 1)).toString().padStart(2, '0')}
                       </span>
+                    </div>
+
+                    {/* Distance to Next WP Countdown & Status Badge */}
+                    <div className="flex items-center justify-between pt-1 mt-0.5 text-[9px]">
+                      <span className="text-slate-400">Target Dist:</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-white font-bold font-mono">
+                          {formatWaypointDistance(drone.distanceToNextWaypointMeters)}
+                        </span>
+                        {(() => {
+                          const badge = getWaypointStatusBadge(drone.nextWaypointStatus);
+                          return (
+                            <span className={`px-1 py-0.2 rounded text-[8px] font-extrabold border ${badge.badgeClass}`}>
+                              {badge.label}
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </div>
                   </div>
 

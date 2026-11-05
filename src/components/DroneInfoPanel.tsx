@@ -16,6 +16,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { Drone } from '../types/fleet';
+import { formatWaypointDistance } from '../services/telemetryEngine';
 
 interface DroneInfoPanelProps {
   drone: Drone;
@@ -130,7 +131,10 @@ export const DroneInfoPanel: React.FC<DroneInfoPanelProps> = ({
   const destLabel = drone.delivery?.destinationAddress || destWp?.name || 'Unknown';
   const destShort = destLabel.split(',')[0];
 
-  const nextWp = drone.route.find(w => w.status === 'active' || w.status === 'upcoming');
+  const targetIdx = drone.targetWaypointIndex !== undefined
+    ? drone.targetWaypointIndex
+    : (drone.currentWaypointIndex === 0 && drone.route.length > 1 ? 1 : drone.currentWaypointIndex);
+  const nextWp = drone.route[targetIdx] || drone.route[drone.route.length - 1];
 
   return (
     <div className="drone-info-panel" style={isWarning ? { borderColor: 'rgba(239,68,68,0.4)' } : {}}>
@@ -254,15 +258,22 @@ export const DroneInfoPanel: React.FC<DroneInfoPanelProps> = ({
 
       {/* Next Waypoint */}
       {nextWp && (
-        <div className="px-4 py-2 border-b border-[#1a2235] flex items-center gap-2">
-          <ArrowRight className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <span className="text-[10px] text-slate-400">Next: </span>
-            <span className="text-[10px] text-slate-200 truncate">{nextWp.name}</span>
+        <div className="px-4 py-2 border-b border-[#1a2235] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <ArrowRight className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
+            <div className="min-w-0">
+              <span className="text-[10px] text-cyan-400 font-bold mr-1">WP-{String(targetIdx + 1).padStart(2, '0')}:</span>
+              <span className="text-[10px] text-slate-200 truncate">{nextWp.name}</span>
+            </div>
           </div>
-          {nextWp.etaMinutes != null && (
-            <span className="text-[10px] font-mono text-cyan-400 flex-shrink-0">{Math.max(0, Math.round(nextWp.etaMinutes))}m</span>
-          )}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span className="text-[10px] font-mono font-bold text-white">
+              {formatWaypointDistance(drone.distanceToNextWaypointMeters)}
+            </span>
+            <span className="text-[9px] font-extrabold px-1 py-0.2 rounded bg-cyan-950 border border-cyan-700 text-cyan-300">
+              {drone.nextWaypointStatus || 'APPROACHING'}
+            </span>
+          </div>
         </div>
       )}
 

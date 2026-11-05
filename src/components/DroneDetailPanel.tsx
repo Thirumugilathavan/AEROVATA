@@ -27,6 +27,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Drone, Waypoint, ObstacleConflict } from '../types/fleet';
+import { formatWaypointDistance, getWaypointStatusBadge, getDistanceMeters } from '../services/telemetryEngine';
 
 interface DroneDetailPanelProps {
   drone: Drone;
@@ -596,15 +597,32 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                 </div>
               </div>
 
-              {/* Distance Remaining & ETA */}
-              <div className="flex items-center justify-between md:justify-around bg-[#0a0e18] px-3 py-1.5 rounded border border-[#1b273d] text-xs font-mono">
+              {/* Distance Remaining, Status & ETA */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#0a0e18] px-3 py-2 rounded border border-[#1b273d] text-xs font-mono">
                 <div>
-                  <div className="text-[10px] text-slate-400 uppercase">Distance Left</div>
+                  <div className="text-[10px] text-slate-400 uppercase">Dist to Next WP</div>
                   <div className="font-bold text-cyan-300">
+                    {formatWaypointDistance(drone.distanceToNextWaypointMeters)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400 uppercase">Target Status</div>
+                  {(() => {
+                    const badge = getWaypointStatusBadge(drone.nextWaypointStatus);
+                    return (
+                      <div className={`font-bold ${badge.colorClass}`}>
+                        {badge.label}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400 uppercase">Total Route Left</div>
+                  <div className="font-bold text-slate-200">
                     {drone.distanceRemainingKm !== undefined ? `${drone.distanceRemainingKm.toFixed(2)} km` : `${(drone.route.length * 0.8).toFixed(1)} km`}
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="text-right sm:text-left">
                   <div className="text-[10px] text-slate-400 uppercase">Est. ETA</div>
                   <div className="font-bold text-emerald-400">
                     {drone.etaSecondsRemaining !== undefined ? `${Math.ceil(drone.etaSecondsRemaining / 60)} min` : `${drone.vitals.estimatedFlightTimeMinutes} min`}
@@ -617,17 +635,27 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
             <div className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar min-h-0">
               <div className="flex gap-2.5 h-full items-stretch py-0.5">
                 {drone.route.map((wp, idx) => {
+                  const targetIdx = drone.targetWaypointIndex !== undefined
+                    ? drone.targetWaypointIndex
+                    : (drone.currentWaypointIndex === 0 && drone.route.length > 1 ? 1 : drone.currentWaypointIndex);
                   const isSelected = wp.id === selectedWaypointId;
-                  const isCurrent = idx === drone.currentWaypointIndex;
-                  const isDone = wp.status === 'completed' || idx < drone.currentWaypointIndex;
+                  const isCurrent = idx === targetIdx;
+                  const isDone = wp.status === 'completed' || idx < targetIdx;
                   const isDest = idx === drone.route.length - 1 || wp.type === 'delivery';
                   const wpNum = String(idx + 1).padStart(2, '0');
+
+                  const wpDist = isCurrent && drone.distanceToNextWaypointMeters !== undefined
+                    ? drone.distanceToNextWaypointMeters
+                    : Math.round(getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, wp.lat, wp.lng));
+                  const formattedWpDist = formatWaypointDistance(wpDist);
 
                   let cardStyle = 'border-slate-800 bg-[#0e1422] text-slate-400';
                   if (isSelected) {
                     cardStyle = 'border-cyan-400 bg-cyan-950/70 text-white ring-2 ring-cyan-400/60 shadow-[0_0_15px_rgba(6,182,212,0.4)]';
                   } else if (isCurrent) {
-                    cardStyle = 'border-cyan-400/90 bg-cyan-950/40 text-cyan-100 ring-1 ring-cyan-400/40 shadow-[0_0_10px_rgba(6,182,212,0.25)]';
+                    cardStyle = drone.nextWaypointStatus === 'NEAR_WAYPOINT'
+                      ? 'border-amber-400/90 bg-amber-950/40 text-amber-100 ring-1 ring-amber-400/50 shadow-[0_0_12px_rgba(245,158,11,0.3)]'
+                      : 'border-cyan-400/90 bg-cyan-950/40 text-cyan-100 ring-1 ring-cyan-400/40 shadow-[0_0_10px_rgba(6,182,212,0.25)]';
                   } else if (isDone) {
                     cardStyle = 'border-emerald-800/80 bg-emerald-950/20 text-emerald-300';
                   }
@@ -636,7 +664,7 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                     <div
                       key={wp.id}
                       onClick={() => onSelectWaypoint(wp.id)}
-                      className={`w-48 p-2.5 rounded-lg border ${cardStyle} cursor-pointer hover:border-cyan-400 hover:bg-[#131d2e] transition-all flex flex-col justify-between shrink-0 select-none`}
+                      className={`w-52 p-2.5 rounded-lg border ${cardStyle} cursor-pointer hover:border-cyan-400 hover:bg-[#131d2e] transition-all flex flex-col justify-between shrink-0 select-none`}
                     >
                       <div className="flex items-center justify-between text-xs font-mono font-bold">
                         <span className="flex items-center gap-1.5">
@@ -651,11 +679,11 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.2 rounded uppercase font-bold ${
                           isDone ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
-                          isCurrent ? 'bg-cyan-900 text-cyan-300 border border-cyan-500 animate-pulse' :
+                          isCurrent ? (drone.nextWaypointStatus === 'NEAR_WAYPOINT' ? 'bg-amber-900 text-amber-300 border border-amber-500 animate-pulse' : 'bg-cyan-900 text-cyan-300 border border-cyan-500 animate-pulse') :
                           isDest ? 'bg-rose-950 text-rose-300 border border-rose-800' :
                           'bg-slate-800 text-slate-400'
                         }`}>
-                          {isCurrent ? 'NEXT TARGET' : isDone ? 'PASSED' : isDest ? 'DEST PAD' : wp.type}
+                          {isCurrent ? (drone.nextWaypointStatus === 'WAYPOINT_REACHED' ? 'REACHED' : `TARGET (${formattedWpDist})`) : isDone ? 'PASSED' : isDest ? 'DEST PAD' : wp.type}
                         </span>
                       </div>
 
@@ -663,8 +691,9 @@ export const DroneDetailPanel: React.FC<DroneDetailPanelProps> = ({
                         <div className="text-xs font-bold text-white truncate" title={wp.name}>
                           {wp.name}
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                          {wp.lat.toFixed(4)}°N, {wp.lng.toFixed(4)}°E
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5 flex items-center justify-between">
+                          <span>{wp.lat.toFixed(4)}°N, {wp.lng.toFixed(4)}°E</span>
+                          <span className="text-cyan-300 font-bold">{formattedWpDist}</span>
                         </div>
                       </div>
 

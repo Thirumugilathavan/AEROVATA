@@ -21,6 +21,7 @@ import {
   Compass
 } from 'lucide-react';
 import { Drone, DroneStatus, Waypoint } from '../types/fleet';
+import { formatWaypointDistance, getWaypointStatusBadge, getDistanceMeters } from '../services/telemetryEngine';
 
 export interface BottomMissionBarProps {
   selectedDrone: Drone | null;
@@ -83,11 +84,17 @@ export const BottomMissionBar: React.FC<BottomMissionBarProps> = ({
   const batColor = bat > 50 ? 'text-emerald-400' : bat > 25 ? 'text-amber-400' : 'text-rose-400';
   const alt = drone ? Math.round(drone.vitals.altitudeMeters) : 65;
   const speed = drone ? Math.round(drone.vitals.groundSpeedKmh) : 0;
-  const nextWp = drone?.route && drone.currentWaypointIndex < drone.route.length - 1
-    ? drone.route[drone.currentWaypointIndex + 1]
-    : null;
+  const targetIdx = drone?.targetWaypointIndex !== undefined
+    ? drone.targetWaypointIndex
+    : (drone ? (drone.currentWaypointIndex === 0 && drone.route && drone.route.length > 1 ? 1 : drone.currentWaypointIndex) : 1);
+  const nextWp = drone?.route?.[targetIdx] || (drone?.route && drone.route[drone.route.length - 1]);
   const nextWpName = drone?.nextWaypointName || (nextWp ? nextWp.name : 'Approaching Pad');
-  const nextWpNum = drone ? (drone.currentWaypointIndex + 1).toString().padStart(2, '0') : '01';
+  const nextWpNum = String(targetIdx + 1).padStart(2, '0');
+  const distToNextMeters = drone?.distanceToNextWaypointMeters !== undefined
+    ? drone.distanceToNextWaypointMeters
+    : (drone && nextWp ? Math.round(getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, nextWp.lat, nextWp.lng)) : 0);
+  const distStr = formatWaypointDistance(distToNextMeters);
+  const statusBadge = getWaypointStatusBadge(drone?.nextWaypointStatus);
 
   return (
     <div className="w-full bg-[#0a0e18]/95 border-t border-[#1e2a40] backdrop-blur-md select-none shrink-0 z-10 transition-all duration-300">
@@ -120,11 +127,16 @@ export const BottomMissionBar: React.FC<BottomMissionBarProps> = ({
             </span>
           </div>
 
-          {/* Next Waypoint Target */}
-          <div className="hidden lg:flex items-center gap-1.5 bg-[#0e1422] border border-[#1e2c45] px-2 py-1 rounded text-[11px] truncate">
+          {/* Next Waypoint Target & Live Countdown */}
+          <div className="hidden lg:flex items-center gap-1.5 bg-[#0e1422] border border-[#1e2c45] px-2.5 py-1 rounded text-[11px] truncate shadow-sm">
             <span className="text-cyan-400 font-bold">WP-{nextWpNum}:</span>
-            <span className="text-slate-300 truncate max-w-[160px]" title={nextWpName}>
+            <span className="text-slate-200 truncate max-w-[140px]" title={nextWpName}>
               {nextWpName}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="font-bold text-white font-mono">{distStr}</span>
+            <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded border ${statusBadge.badgeClass}`}>
+              {statusBadge.label}
             </span>
           </div>
         </div>
@@ -145,6 +157,15 @@ export const BottomMissionBar: React.FC<BottomMissionBarProps> = ({
             <span className="text-slate-400 text-[10px]">ALT:</span>
             <span className="font-bold text-cyan-300">{alt}m</span>
           </div>
+          {drone?.distanceRemainingKm !== undefined && (
+            <>
+              <span className="text-slate-700">|</span>
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400 text-[10px]">REM:</span>
+                <span className="font-bold text-slate-200">{drone.distanceRemainingKm.toFixed(1)}km</span>
+              </div>
+            </>
+          )}
           {drone?.vitals.rtbStatus && (
             <>
               <span className="text-slate-700">|</span>
