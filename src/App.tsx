@@ -50,7 +50,8 @@ import {
 } from './types/fleet';
 import { 
   updateSimulationTick, 
-  generateSmartReplan 
+  generateSmartReplan,
+  getDistanceMeters
 } from './services/telemetryEngine';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from './data/officialAirspaceData';
 
@@ -167,8 +168,21 @@ export function App() {
           const targetId = t.droneId || 'AV-01';
           return prevDrones.map((d): Drone => {
             if (d.id === targetId) {
+              const targetIdx = d.targetWaypointIndex !== undefined
+                ? d.targetWaypointIndex
+                : (d.currentWaypointIndex === 0 && d.route.length > 1 ? 1 : d.currentWaypointIndex);
+              const targetWp = d.route[targetIdx];
+              const distToTarget = targetWp
+                ? Math.round(getDistanceMeters(t.lat, t.lng, targetWp.lat, targetWp.lng))
+                : d.distanceToNextWaypointMeters;
+              const nextStatus = distToTarget !== undefined
+                ? (distToTarget <= 20 ? 'WAYPOINT_REACHED' : distToTarget <= 150 ? 'NEAR_WAYPOINT' : 'APPROACHING')
+                : d.nextWaypointStatus;
+
               return {
                 ...d,
+                distanceToNextWaypointMeters: distToTarget,
+                nextWaypointStatus: nextStatus,
                 vitals: {
                   ...d.vitals,
                   latitude: t.lat,
@@ -415,11 +429,24 @@ export function App() {
             ...logs,
           ]);
 
+          const route = replanData.proposedRoute.map((wp, idx) => ({
+            ...wp,
+            status: (idx === 0 ? 'completed' : idx === 1 ? 'active' : 'upcoming') as 'completed' | 'active' | 'upcoming',
+          }));
+          const targetWp = route[1] || route[0];
+          const distToDetour = Math.round(
+            getDistanceMeters(d.vitals.latitude, d.vitals.longitude, targetWp.lat, targetWp.lng)
+          );
+
           return {
             ...d,
-            route: replanData.proposedRoute,
+            route,
             originalRoute: d.route,
-            currentWaypointIndex: 0,
+            currentWaypointIndex: 1,
+            targetWaypointIndex: 1,
+            distanceToNextWaypointMeters: distToDetour,
+            nextWaypointName: targetWp.name,
+            nextWaypointStatus: distToDetour <= 150 ? 'NEAR_WAYPOINT' : 'APPROACHING',
             status: 'delivering',
             routeStatus: 'A_STAR_REROUTED',
             isRerouting: true,

@@ -42,7 +42,7 @@ import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import type { Mission, MissionTelemetry, CameraConnectionStatus } from '../types/mission';
 import type { Drone } from '../types/fleet';
 import { apiService } from '../services/api/index';
-import { getDistanceMeters } from '../services/telemetryEngine';
+import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
 
 interface LiveCameraScreenProps {
   onBackToMap?: () => void;
@@ -107,10 +107,16 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
   const satellites = activeDrone?.vitals.satellites ?? telemetry?.satellites ?? 22;
 
   // Next waypoint calculation
-  const nextWaypoint = activeDrone?.route[activeDrone.currentWaypointIndex + 1] || activeDrone?.route[activeDrone.route.length - 1];
-  const distToNextWp = (activeDrone && nextWaypoint)
-    ? Math.round(getDistanceMeters(activeDrone.vitals.latitude, activeDrone.vitals.longitude, nextWaypoint.lat, nextWaypoint.lng))
-    : 340;
+  const targetIdx = activeDrone?.targetWaypointIndex !== undefined
+    ? activeDrone.targetWaypointIndex
+    : (activeDrone ? (activeDrone.currentWaypointIndex === 0 && activeDrone.route && activeDrone.route.length > 1 ? 1 : activeDrone.currentWaypointIndex) : 1);
+  const nextWaypoint = activeDrone?.route?.[targetIdx] || (activeDrone?.route && activeDrone.route[activeDrone.route.length - 1]);
+  const distToNextWp = activeDrone?.distanceToNextWaypointMeters !== undefined
+    ? activeDrone.distanceToNextWaypointMeters
+    : (activeDrone && nextWaypoint
+        ? Math.round(getDistanceMeters(activeDrone.vitals.latitude, activeDrone.vitals.longitude, nextWaypoint.lat, nextWaypoint.lng))
+        : 340);
+  const formattedNextDist = formatWaypointDistance(distToNextWp);
 
   // High-fidelity 3D Canvas Gimbal Viewport (Runs when TACTICAL_3D_FPV or as fallback)
   useEffect(() => {
@@ -522,7 +528,7 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
                     <span>LOCKED TARGET</span>
                   </span>
                   <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                    WP-{(activeDrone ? activeDrone.currentWaypointIndex + 1 : 1).toString().padStart(2, '0')}
+                    WP-{String(targetIdx + 1).padStart(2, '0')}
                   </span>
                 </div>
                 <div className="font-bold text-xs text-white truncate mb-1" title={nextWaypoint?.name || 'Assigned Waypoint'}>
@@ -534,11 +540,11 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
                 </div>
                 <div className="flex justify-between py-0.5 text-[11px]">
                   <span className="text-slate-400">RANGE TO TARGET:</span>
-                  <span className="text-emerald-400 font-bold">{distToNextWp} m</span>
+                  <span className="text-emerald-400 font-bold">{formattedNextDist}</span>
                 </div>
                 <div className="flex justify-between py-0.5 text-[11px]">
-                  <span className="text-slate-400">FLIGHT PHASE:</span>
-                  <span className="text-amber-300 font-bold uppercase">{activeDrone?.status || 'EN ROUTE'}</span>
+                  <span className="text-slate-400">TARGET STATUS:</span>
+                  <span className="text-cyan-300 font-bold uppercase">{activeDrone?.nextWaypointStatus || 'APPROACHING'}</span>
                 </div>
               </div>
             </div>

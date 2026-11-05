@@ -15,7 +15,7 @@ import {
   Navigation 
 } from 'lucide-react';
 import { Drone } from '../types/fleet';
-import { getDistanceMeters } from '../services/telemetryEngine';
+import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
 
 interface DronePOVCameraProps {
   drone: Drone;
@@ -31,10 +31,14 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
   const backendStreamUrl = `http://localhost:8000/api/v1/drones/${drone.id}/stream`;
 
   // Next waypoint target
-  const nextWp = drone.route[drone.currentWaypointIndex + 1] || drone.route[drone.route.length - 1];
-  const distToNextMeters = nextWp
-    ? Math.round(getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, nextWp.lat, nextWp.lng))
-    : 0;
+  const targetIdx = drone.targetWaypointIndex !== undefined
+    ? drone.targetWaypointIndex
+    : (drone.currentWaypointIndex === 0 && drone.route.length > 1 ? 1 : drone.currentWaypointIndex);
+  const nextWp = drone.route[targetIdx] || drone.route[drone.route.length - 1];
+  const distToNextMeters = drone.distanceToNextWaypointMeters !== undefined
+    ? drone.distanceToNextWaypointMeters
+    : (nextWp ? Math.round(getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, nextWp.lat, nextWp.lng)) : 0);
+  const formattedNextDist = formatWaypointDistance(distToNextMeters);
 
   // Real-time canvas animation for forward gimbal view
   useEffect(() => {
@@ -302,7 +306,7 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
 
           {/* Waypoint Optical Target Box */}
           <div className="absolute -top-12 px-2 py-0.5 bg-emerald-950/80 border border-emerald-400 text-emerald-300 text-[10px] font-mono font-bold whitespace-nowrap rounded animate-pulse">
-            WP LOCK: {nextWp.name.toUpperCase()} ({distToNextMeters}m)
+            WP LOCK: {nextWp.name.toUpperCase()} ({formattedNextDist})
           </div>
         </div>
 

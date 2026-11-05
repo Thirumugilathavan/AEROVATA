@@ -9,7 +9,8 @@ import {
   NotificationItem,
   AirspaceAlert,
   OfficialAirspaceZone,
-  ReplanResult
+  ReplanResult,
+  NextWaypointStatus
 } from '../types/fleet';
 import { 
   OFFICIAL_COIMBATORE_AIRSPACE_ZONES, 
@@ -44,6 +45,62 @@ export function getBearingDegrees(lat1: number, lon1: number, lat2: number, lon2
       Math.cos(((lon2 - lon1) * Math.PI) / 180);
   const bearing = (Math.atan2(y, x) * 180) / Math.PI;
   return (bearing + 360) % 360;
+}
+
+// Format waypoint distance: < 1000m -> meters (e.g. 850m, 340m), >= 1000m -> km (e.g. 1.45 km)
+export function formatWaypointDistance(meters?: number | null): string {
+  if (meters === undefined || meters === null || isNaN(meters)) return '--';
+  if (meters < 1000) {
+    return `${Math.round(meters)}m`;
+  }
+  return `${(meters / 1000).toFixed(2)} km`;
+}
+
+// Waypoint status styling badge helper
+export function getWaypointStatusBadge(status?: NextWaypointStatus): {
+  label: string;
+  colorClass: string;
+  badgeClass: string;
+  dotClass: string;
+} {
+  switch (status) {
+    case 'WAYPOINT_REACHED':
+      return {
+        label: 'WAYPOINT REACHED',
+        colorClass: 'text-emerald-400',
+        badgeClass: 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300',
+        dotClass: 'bg-emerald-400',
+      };
+    case 'NEAR_WAYPOINT':
+      return {
+        label: 'NEAR WAYPOINT',
+        colorClass: 'text-amber-400',
+        badgeClass: 'bg-amber-950/80 border-amber-500/60 text-amber-300',
+        dotClass: 'bg-amber-400 animate-ping',
+      };
+    case 'WAYPOINT_BLOCKED':
+      return {
+        label: 'WAYPOINT BLOCKED',
+        colorClass: 'text-rose-400',
+        badgeClass: 'bg-rose-950/80 border-rose-500/60 text-rose-300',
+        dotClass: 'bg-rose-400 animate-ping',
+      };
+    case 'TELEMETRY_UNAVAILABLE':
+      return {
+        label: 'TELEMETRY UNAVAILABLE',
+        colorClass: 'text-slate-400',
+        badgeClass: 'bg-slate-900 border-slate-700 text-slate-400',
+        dotClass: 'bg-slate-500',
+      };
+    case 'APPROACHING':
+    default:
+      return {
+        label: 'APPROACHING',
+        colorClass: 'text-cyan-400',
+        badgeClass: 'bg-cyan-950/80 border-cyan-500/60 text-cyan-300',
+        dotClass: 'bg-cyan-400 animate-pulse',
+      };
+  }
 }
 
 // Point-in-polygon algorithm
@@ -316,15 +373,24 @@ export function updateSimulationTick(
     }
 
     // ─── Sequential Waypoint Progression Controller ──────────────
-    const currentWpIndex = drone.currentWaypointIndex;
     let updatedRoute = [...drone.route];
-    let nextWp = updatedRoute[currentWpIndex + 1];
-    let newWpIndex = currentWpIndex;
+    if (updatedRoute.length === 0) {
+      return drone;
+    }
 
-    // Check if drone has arrived at final destination waypoint
-    if (!nextWp || currentWpIndex >= updatedRoute.length - 1) {
+    // Determine target waypoint index (1-based from origin depot, or explicit targetWaypointIndex)
+    let targetIndex = drone.targetWaypointIndex !== undefined
+      ? drone.targetWaypointIndex
+      : (drone.currentWaypointIndex === 0 && updatedRoute.length > 1 ? 1 : drone.currentWaypointIndex);
+    
+    // Clamp targetIndex within valid route boundaries
+    targetIndex = Math.max(0, Math.min(updatedRoute.length - 1, targetIndex));
+    let targetWp = updatedRoute[targetIndex];
+
+    // Check if drone has arrived at final destination
+    if (targetIndex >= updatedRoute.length - 1 && getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, targetWp.lat, targetWp.lng) <= 15) {
       // Mission is complete! Hold position at destination - DO NOT LOOP BACKWARDS!
-      const finalDestName = drone.missionDestinationName || updatedRoute[updatedRoute.length - 1]?.name || 'Destination';
+      const finalDestName = drone.missionDestinationName || updatedRoute[updatedRoute.length - 1]?.name || 'Destination Pad';
       const timeStr = new Date().toTimeString().split(' ')[0];
 
       newLogs.push({
@@ -332,93 +398,141 @@ export function updateSimulationTick(
         timestamp: timeStr,
         droneId: drone.id,
         droneCallsign: drone.callsign,
-        event: `MISSION COMPLETED: ${drone.callsign} has arrived and stabilized at destination (${finalDestName}). Entering auto-dock hold.`,
+        event: `MISSION COMPLETED: ${drone.callsign} has arrived and stabilized at destination (${finalDestName}). Auto-dock hold active.`,
         type: 'success',
       });
 
-      newNotifications.push({
-        id: `notif-complete-${Date.now()}-${drone.id}`,
-        title: `Mission Completed: ${drone.callsign}`,
-        description: `Aircraft ${drone.callsign} successfully completed its delivery to ${finalDestName}. Optical tether released. Stabilized hover hold active.`,
-        timestamp: timeStr,
-        severity: 'success',
-        category: 'mission',
-        droneId: drone.id,
-        droneCallsign: drone.callsign,
-        read: false,
-        acknowledged: false,
-      });
+        newNotifications.push({
+          id: `notif-complete-${Date.now()}-${drone.id}`,
+          title: `Mission Completed: ${drone.callsign}`,
+          description: `Aircraft ${drone.callsign} successfully completed its delivery to ${finalDestName}. Optical tether released. Stabilized hover hold active.`,
+          timestamp: timeStr,
+          severity: 'success',
+          category: 'mission',
+          droneId: drone.id,
+          droneCallsign: drone.callsign,
+          read: false,
+          acknowledged: false,
+        });
+
+      // Mark all waypoints as completed
+      updatedRoute = updatedRoute.map((wp) => ({ ...wp, status: 'completed' as const }));
 
       return {
         ...drone,
         status: 'hovering',
         statusLabel: `MISSION COMPLETED - DOCKED AT ${finalDestName}`,
         routeStatus: 'MISSION_COMPLETED',
+        route: updatedRoute,
         distanceRemainingKm: 0,
+        totalRouteDistanceKm: 0,
+        distanceToNextWaypointMeters: 0,
+        nextWaypointStatus: 'WAYPOINT_REACHED',
         etaSecondsRemaining: 0,
         currentWaypointIndex: updatedRoute.length - 1,
+        targetWaypointIndex: updatedRoute.length - 1,
         vitals: {
           ...drone.vitals,
+          latitude: targetWp.lat,
+          longitude: targetWp.lng,
           groundSpeedKmh: 0,
           verticalSpeedMs: 0,
         },
       };
     }
 
-    // Distance to the target waypoint
-    const distanceToNext = getDistanceMeters(
+    // Distance from drone's current position to target waypoint (geodesic Haversine)
+    const distanceToTarget = getDistanceMeters(
       drone.vitals.latitude,
       drone.vitals.longitude,
-      nextWp.lat,
-      nextWp.lng
+      targetWp.lat,
+      targetWp.lng
     );
 
     const currentSpeedKmh = drone.vitals.groundSpeedKmh > 5 ? drone.vitals.groundSpeedKmh : 48.0;
     const speedMs = (currentSpeedKmh * 1000) / 3600;
     const stepDistance = speedMs * deltaSeconds;
+    // Configurable tolerance radius: 18m or 1.5 * stepDistance
+    const arrivalRadius = Math.max(stepDistance * 1.5, 18);
 
     let newLat = drone.vitals.latitude;
     let newLng = drone.vitals.longitude;
     let newAlt = drone.vitals.altitudeMeters;
+    let liveDistToTarget = distanceToTarget;
+    let wpStatus: NextWaypointStatus = 'APPROACHING';
 
-    if (distanceToNext <= Math.max(stepDistance * 1.5, 12)) {
-      // Reached waypoint: advance strictly to next index
-      newLat = nextWp.lat;
-      newLng = nextWp.lng;
-      newAlt = nextWp.altitudeMeters;
-      newWpIndex = Math.min(updatedRoute.length - 1, currentWpIndex + 1);
+    if (distanceToTarget <= arrivalRadius) {
+      // ── Target Waypoint Reached ──
+      newLat = targetWp.lat;
+      newLng = targetWp.lng;
+      newAlt = targetWp.altitudeMeters;
 
-      updatedRoute[currentWpIndex] = { ...updatedRoute[currentWpIndex], status: 'completed' };
-      if (updatedRoute[newWpIndex]) {
-        updatedRoute[newWpIndex] = { ...updatedRoute[newWpIndex], status: 'active' };
+      // Mark reached waypoint completed and ensure prior waypoints are completed
+      for (let i = 0; i <= targetIndex; i++) {
+        updatedRoute[i] = { ...updatedRoute[i], status: 'completed' };
       }
 
+      const reachedWpName = targetWp.name;
       const timeStr = new Date().toTimeString().split(' ')[0];
-      newLogs.push({
-        id: `log-wp-${Date.now()}-${drone.id}`,
-        timestamp: timeStr,
-        droneId: drone.id,
-        droneCallsign: drone.callsign,
-        event: `Wayfix reached: ${nextWp.name} (${Math.round(nextWp.altitudeMeters)}m AGL). Advancing corridor leg.`,
-        type: nextWp.type === 'delivery' ? 'success' : 'info',
-      });
+
+      if (targetIndex >= updatedRoute.length - 1) {
+        // Reached the final destination pad!
+        wpStatus = 'WAYPOINT_REACHED';
+        liveDistToTarget = 0;
+        newLogs.push({
+          id: `log-complete-${Date.now()}-${drone.id}`,
+          timestamp: timeStr,
+          droneId: drone.id,
+          droneCallsign: drone.callsign,
+          event: `MISSION COMPLETED: ${drone.callsign} has arrived at destination (${reachedWpName}). Dock hold active.`,
+          type: 'success',
+        });
+      } else {
+        // Advance to next pending waypoint in sequence!
+        targetIndex = targetIndex + 1;
+        targetWp = updatedRoute[targetIndex];
+        updatedRoute[targetIndex] = { ...updatedRoute[targetIndex], status: 'active' };
+
+        // Calculate distance from reached fix to the newly selected next target waypoint
+        liveDistToTarget = Math.round(getDistanceMeters(newLat, newLng, targetWp.lat, targetWp.lng));
+        wpStatus = liveDistToTarget <= 150 ? 'NEAR_WAYPOINT' : 'APPROACHING';
+
+        newLogs.push({
+          id: `log-wp-${Date.now()}-${drone.id}`,
+          timestamp: timeStr,
+          droneId: drone.id,
+          droneCallsign: drone.callsign,
+          event: `Waypoint reached: ${reachedWpName}. Next active waypoint: ${targetWp.name} (${formatWaypointDistance(liveDistToTarget)}).`,
+          type: targetWp.type === 'delivery' ? 'success' : 'info',
+        });
+      }
     } else {
-      // Smooth linear interpolation along the active flight vector
-      const ratio = Math.min(1, stepDistance / distanceToNext);
-      newLat = drone.vitals.latitude + (nextWp.lat - drone.vitals.latitude) * ratio;
-      newLng = drone.vitals.longitude + (nextWp.lng - drone.vitals.longitude) * ratio;
-      newAlt = drone.vitals.altitudeMeters + (nextWp.altitudeMeters - drone.vitals.altitudeMeters) * ratio;
+      // ── Approaching Target Waypoint: Smooth linear interpolation ──
+      const ratio = Math.min(1, stepDistance / distanceToTarget);
+      newLat = drone.vitals.latitude + (targetWp.lat - drone.vitals.latitude) * ratio;
+      newLng = drone.vitals.longitude + (targetWp.lng - drone.vitals.longitude) * ratio;
+      newAlt = drone.vitals.altitudeMeters + (targetWp.altitudeMeters - drone.vitals.altitudeMeters) * ratio;
+
+      // Recalculate remaining distance to active waypoint from fresh position (strictly decreasing!)
+      liveDistToTarget = Math.round(getDistanceMeters(newLat, newLng, targetWp.lat, targetWp.lng));
+      if (liveDistToTarget <= 25) {
+        wpStatus = 'WAYPOINT_REACHED';
+      } else if (liveDistToTarget <= 150) {
+        wpStatus = 'NEAR_WAYPOINT';
+      } else {
+        wpStatus = 'APPROACHING';
+      }
     }
 
-    // Smooth heading calculation toward target waypoint
-    const targetHeading = Math.round(getBearingDegrees(newLat, newLng, nextWp.lat, nextWp.lng));
+    // Smooth heading calculation toward currently active target waypoint
+    const targetHeading = Math.round(getBearingDegrees(newLat, newLng, targetWp.lat, targetWp.lng));
     let newHeading = drone.vitals.headingDegrees;
-    let headingDiff = (targetHeading - newHeading + 540) % 360 - 180;
+    let headingDiff = ((targetHeading - newHeading + 540) % 360) - 180;
     newHeading = Math.round((newHeading + headingDiff * 0.35 + 360) % 360);
 
-    // Calculate live distance remaining along all remaining route segments
-    let remainingDistMeters = getDistanceMeters(newLat, newLng, nextWp.lat, nextWp.lng);
-    for (let k = newWpIndex + 1; k < updatedRoute.length; k++) {
+    // Calculate total remaining distance across ALL remaining route segments to final destination
+    let remainingDistMeters = liveDistToTarget;
+    for (let k = targetIndex + 1; k < updatedRoute.length; k++) {
       remainingDistMeters += getDistanceMeters(
         updatedRoute[k - 1].lat,
         updatedRoute[k - 1].lng,
@@ -427,7 +541,7 @@ export function updateSimulationTick(
       );
     }
     const distanceRemainingKm = Math.round((remainingDistMeters / 1000) * 100) / 100;
-    const etaSecondsRemaining = Math.round((remainingDistMeters / Math.max(5, speedMs)));
+    const etaSecondsRemaining = Math.round(remainingDistMeters / Math.max(5, speedMs));
 
     // Battery burn
     const batDrainRate = 0.012 * deltaSeconds * (1 + drone.vitals.payloadWeightKg * 0.1);
@@ -483,7 +597,11 @@ export function updateSimulationTick(
 
     let updatedDrone: Drone = {
       ...drone,
-      currentWaypointIndex: newWpIndex,
+      currentWaypointIndex: targetIndex,
+      targetWaypointIndex: targetIndex,
+      distanceToNextWaypointMeters: liveDistToTarget,
+      nextWaypointStatus: wpStatus,
+      nextWaypointName: targetWp.name,
       route: updatedRoute,
       flightTrail: updatedTrail,
       currentAirspaceZone: currentZone,
@@ -491,8 +609,8 @@ export function updateSimulationTick(
       distanceToNearestRestrictedZoneMeters: minRestrictedDist === Infinity ? 0 : minRestrictedDist,
       nearestRestrictedZoneName: nearestZoneName,
       distanceRemainingKm,
+      totalRouteDistanceKm: distanceRemainingKm,
       etaSecondsRemaining,
-      nextWaypointName: nextWp ? nextWp.name : (drone.missionDestinationName || 'Destination'),
       vitals: {
         ...drone.vitals,
         latitude: newLat,
@@ -558,9 +676,9 @@ export function updateSimulationTick(
     }
 
     // Predictive continuous segment check along the active upcoming route
-    if (!conflictDetected && nextWp) {
+    if (!conflictDetected && targetWp) {
       const p1Metric = geoToMetric(newLng, newLat, newAlt);
-      const p2Metric = geoToMetric(nextWp.lng, nextWp.lat, nextWp.altitudeMeters || 65);
+      const p2Metric = geoToMetric(targetWp.lng, targetWp.lat, targetWp.altitudeMeters || 65);
       const segCheck = isSegment3DTraversable(p1Metric, p2Metric, updatedDrone, obstacles, officialAirspaceZones, drones, 25);
       if (!segCheck.traversable) {
         conflictDetected = true;
@@ -585,10 +703,12 @@ export function updateSimulationTick(
         if (!updatedDrone.originalRoute || updatedDrone.originalRoute.length === 0) {
           updatedDrone.originalRoute = [...drone.route];
         }
-        const completed = updatedRoute.slice(0, newWpIndex).filter((w) => w.status === 'completed');
+        // Store past completed waypoints
+        const completed = updatedRoute.slice(0, targetIndex).filter((w) => w.status === 'completed');
         updatedDrone.completedRouteWaypoints = completed;
         updatedDrone.route = replan.proposedRoute;
-        updatedDrone.currentWaypointIndex = 0;
+        updatedDrone.currentWaypointIndex = 1;
+        updatedDrone.targetWaypointIndex = 1;
         updatedDrone.isRerouting = true;
         updatedDrone.routeStatus = 'A_STAR_REROUTED';
         updatedDrone.rerouteReason = conflictReason;
@@ -596,6 +716,16 @@ export function updateSimulationTick(
         updatedDrone.routeVersion = (updatedDrone.routeVersion || 1) + 1;
         if (replan.candidates) {
           updatedDrone.routeCandidates = replan.candidates;
+        }
+
+        if (updatedDrone.route.length > 1) {
+          updatedDrone.route[0].status = 'completed';
+          updatedDrone.route[1].status = 'active';
+          const detourTarget = updatedDrone.route[1];
+          updatedDrone.nextWaypointName = detourTarget.name;
+          const distToDetour = Math.round(getDistanceMeters(newLat, newLng, detourTarget.lat, detourTarget.lng));
+          updatedDrone.distanceToNextWaypointMeters = distToDetour;
+          updatedDrone.nextWaypointStatus = distToDetour <= 150 ? 'NEAR_WAYPOINT' : 'APPROACHING';
         }
 
         const timeStr = new Date().toTimeString().split(' ')[0];

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone, DroneStatus, ObstacleConflict } from '../types/fleet';
+import { formatWaypointDistance, getWaypointStatusBadge } from '../services/telemetryEngine';
 
 interface FleetSidebarProps {
   drones: Drone[];

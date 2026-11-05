@@ -12,6 +12,7 @@ export type MissionPriority = 'URGENT' | 'HIGH' | 'STANDARD' | 'ROUTINE';
 
 export type AirspaceClassification = 'RED' | 'YELLOW' | 'GREEN' | 'UNKNOWN';
 export type AltitudeReference = 'AGL' | 'AMSL';
+export type NextWaypointStatus = 'APPROACHING' | 'NEAR_WAYPOINT' | 'WAYPOINT_REACHED' | 'WAYPOINT_BLOCKED' | 'TELEMETRY_UNAVAILABLE';
 
 export interface OfficialAirspaceZone {
   id: string;
@@ -64,6 +65,7 @@ export interface Waypoint {
   type: 'base' | 'pickup' | 'transit' | 'delivery' | 'handoff';
   status: 'completed' | 'active' | 'upcoming';
   etaMinutes?: number;
+  distanceToWaypointMeters?: number;
 }
 
 export interface DroneVitals {
@@ -146,6 +148,10 @@ export interface Drone {
   routeVersion?: number;
   routeStatus?: 'FOLLOWING_SAFE_ROUTE' | 'A_STAR_REROUTED' | 'SAFE_HOLD' | 'MISSION_COMPLETED' | 'NO_SAFE_ROUTE' | 'ON_COURSE';
   distanceRemainingKm?: number;
+  totalRouteDistanceKm?: number;
+  distanceToNextWaypointMeters?: number;
+  nextWaypointStatus?: NextWaypointStatus;
+  targetWaypointIndex?: number;
   etaSecondsRemaining?: number;
   nextWaypointName?: string;
   targetHeadingDegrees?: number;

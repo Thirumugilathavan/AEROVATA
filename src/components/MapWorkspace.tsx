@@ -44,7 +44,7 @@ import type { Mission, MissionTelemetry, Checkpoint } from '../types/mission';
 import { AIRSPACE_CENTER } from '../data/mockFleet';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from '../data/officialAirspaceData';
-import { getDistanceMeters } from '../services/telemetryEngine';
+import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
 
 interface MapWorkspaceProps {
   drones: Drone[];
@@ -1441,16 +1441,24 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     const selectedDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
     if (!selectedDrone) return;
 
+    const targetIdx = selectedDrone.targetWaypointIndex !== undefined
+      ? selectedDrone.targetWaypointIndex
+      : (selectedDrone.currentWaypointIndex === 0 && selectedDrone.route.length > 1 ? 1 : selectedDrone.currentWaypointIndex);
+
     selectedDrone.route.forEach((wp, idx) => {
       const isSelected = wp.id === selectedWaypointId;
       const wpNumber = String(idx + 1).padStart(2, '0');
-      const isCurrentLeg = idx === selectedDrone.currentWaypointIndex;
-      const isReached = wp.status === 'completed' || idx < selectedDrone.currentWaypointIndex;
+      const isCurrentLeg = idx === targetIdx;
+      const isReached = wp.status === 'completed' || idx < targetIdx;
       const isDestination = idx === selectedDrone.route.length - 1 || wp.type === 'delivery';
 
-      const distToWp = Math.round(
-        getDistanceMeters(selectedDrone.vitals.latitude, selectedDrone.vitals.longitude, wp.lat, wp.lng)
-      );
+      const distToWp = isCurrentLeg && selectedDrone.distanceToNextWaypointMeters !== undefined
+        ? selectedDrone.distanceToNextWaypointMeters
+        : Math.round(
+            getDistanceMeters(selectedDrone.vitals.latitude, selectedDrone.vitals.longitude, wp.lat, wp.lng)
+          );
+      const formattedDist = formatWaypointDistance(distToWp);
+      const wpNavStatus = selectedDrone.nextWaypointStatus || (distToWp <= 20 ? 'WAYPOINT_REACHED' : distToWp <= 150 ? 'NEAR_WAYPOINT' : 'APPROACHING');
 
       const el = document.createElement('div');
       el.className = 'waypoint-marker';
@@ -1465,6 +1473,156 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (isReached && !isSelected) {
         // Compact PASSED Checkpoint Dot (clutter-reduction)
         el.innerHTML = `
+          <div style="
+            position: relative;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+          " title="${wp.name} [PASSED] • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
+            <div style="
+              width: 14px;
+              height: 14px;
+              border-radius: 50%;
+              background: #10b981;
+              border: 1.5px solid #064e3b;
+              box-shadow: 0 0 8px rgba(16,185,129,0.5);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: #022c1b;
+              font-size: 8px;
+              font-weight: 900;
+              font-family: monospace;
+            ">✓</div>
+          </div>
+        `;
+      } else if (!isCurrentLeg && !isDestination && !isSelected) {
+        // Upcoming Transit Checkpoint (Tactical Compact Pill Badge)
+        el.innerHTML = `
+          <div style="
+            position: relative;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            transition: transform 0.15s ease;
+          " title="${wp.name} • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
+            <div style="
+              display: flex;
+              align-items: center;
+              gap: 3px;
+              background: rgba(12, 17, 28, 0.94);
+              border: 1.5px solid #38bdf8;
+              padding: 1.5px 5px;
+              border-radius: 10px;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.8);
+              backdrop-filter: blur(4px);
+            ">
+              <span style="
+                color: #38bdf8;
+                font-family: ui-monospace, SFMono-Regular, monospace;
+                font-size: 9px;
+                font-weight: 800;
+              ">${wpNumber}</span>
+              <span style="
+                color: #94a3b8;
+                font-family: ui-monospace, monospace;
+                font-size: 8px;
+                font-weight: 600;
+              ">${wp.altitudeMeters}m</span>
+            </div>
+          </div>
+        `;
+      } else {
+        if (isReached) {
+          borderStyle = '1.5px solid #10b981';
+          bgStyle = 'rgba(6, 28, 18, 0.92)';
+          statusBadge = `<span style="background: #10b981; color: #021a10; font-size: 8px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">✓ PASSED</span>`;
+        } else if (isCurrentLeg) {
+          const wpNavStatus = (selectedDrone as any).nextWaypointStatus;
+          const formattedDist = (selectedDrone as any).distanceToNextWaypointMeters !== undefined 
+            ? ((selectedDrone as any).distanceToNextWaypointMeters < 1000 ? `${(selectedDrone as any).distanceToNextWaypointMeters}m` : `${((selectedDrone as any).distanceToNextWaypointMeters / 1000).toFixed(1)}km`)
+            : `${distToWp}m`;
+
+          if (wpNavStatus === 'WAYPOINT_REACHED' || distToWp <= 20) {
+            borderStyle = '2px solid #10b981';
+            bgStyle = 'rgba(6, 32, 20, 0.96)';
+            statusBadge = `<span style="background: #10b981; color: #021a10; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 0.8s infinite;">✓ WAYPOINT REACHED</span>`;
+            pulseRing = `
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 76px;
+                height: 76px;
+                margin-top: -38px;
+                margin-left: -38px;
+                border-radius: 50%;
+                border: 2px solid #10b981;
+                background: rgba(16, 185, 129, 0.2);
+                box-shadow: 0 0 18px #10b981;
+                animation: ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+                pointer-events: none;
+                z-index: 0;
+              "></div>
+            `;
+          } else if (wpNavStatus === 'NEAR_WAYPOINT' || distToWp <= 150) {
+            borderStyle = '2px solid #f59e0b';
+            bgStyle = 'rgba(35, 20, 4, 0.96)';
+            statusBadge = `<span style="background: #f59e0b; color: #1a0f00; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 0.7s infinite;">⚡ NEAR TARGET (${formattedDist})</span>`;
+            pulseRing = `
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 74px;
+                height: 74px;
+                margin-top: -37px;
+                margin-left: -37px;
+                border-radius: 50%;
+                border: 2px solid #f59e0b;
+                background: rgba(245, 158, 11, 0.2);
+                box-shadow: 0 0 16px #f59e0b;
+                animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+                pointer-events: none;
+                z-index: 0;
+              "></div>
+            `;
+          } else {
+            borderStyle = '2px solid #00f0ff';
+            bgStyle = 'rgba(8, 28, 45, 0.96)';
+            statusBadge = `<span style="background: #00f0ff; color: #020611; font-size: 9px; font-weight: 900; padding: 1.5px 5px; border-radius: 2px; animation: pulse 1s infinite;">▶ NEXT TARGET (${formattedDist})</span>`;
+            pulseRing = `
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 72px;
+                height: 72px;
+                margin-top: -36px;
+                margin-left: -36px;
+                border-radius: 50%;
+                border: 2px solid #00f0ff;
+                background: rgba(0, 240, 255, 0.15);
+                box-shadow: 0 0 16px #00f0ff;
+                animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+                pointer-events: none;
+                z-index: 0;
+              "></div>
+            `;
+          }
+        } else if (isDestination) {
+          borderStyle = '2px solid #f43f5e';
+          bgStyle = 'rgba(38, 10, 22, 0.94)';
+          statusBadge = `<span style="background: #f43f5e; color: #ffffff; font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 2px;">DESTINATION</span>`;
+        } else {
+          borderStyle = '1.5px solid #24344d';
+          bgStyle = 'rgba(12, 17, 28, 0.92)';
+          statusBadge = `<span style="background: #1e293b; color: #94a3b8; font-size: 8px; font-weight: 700; padding: 1px 3px; border-radius: 2px;">UPCOMING</span>`;
+        }
           <div style="
             position: relative;
             transform: translate(-50%, -50%);
