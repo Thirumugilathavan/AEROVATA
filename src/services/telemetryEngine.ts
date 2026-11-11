@@ -232,6 +232,13 @@ export function evaluate3DObstacleCollision(
     const buffer = obs.safetyBufferMeters || 25;
     const vertBuffer = obs.verticalClearanceBufferMeters || 15;
 
+    // Check if drone is in departure climb corridor towards a cruise altitude that safely clears the obstacle
+    const plannedCruiseAlt = drone.configuredCruiseAltitudeMeters || (drone.route && drone.route[1] ? drone.route[1].altitudeMeters : 0) || 65;
+    const distToDepPad = drone.missionStartCoords
+      ? getDistanceMeters(droneLat, droneLng, drone.missionStartCoords[1], drone.missionStartCoords[0])
+      : 999;
+    const isDeparting = (drone.targetWaypointIndex === undefined || drone.targetWaypointIndex <= 1) && distToDepPad < 180;
+
     // Handle highway flyover deck elevation vs buildings
     if (obs.type === 'highway_flyover') {
       const deckElev = obs.deckElevationMeters ?? physicalHeight;
@@ -240,6 +247,9 @@ export function evaluate3DObstacleCollision(
       const deckBottom = Math.max(0, deckElev - (deckThick / 2) - 3);
 
       if (effectiveDist < buffer + 20) {
+        if (isDeparting && plannedCruiseAlt > deckTop + 5) {
+          continue;
+        }
         if (droneAlt >= deckBottom && droneAlt <= deckTop) {
           // Inside viaduct collision slice
           const severity: 'critical' | 'warning' = effectiveDist < buffer ? 'critical' : 'warning';
@@ -271,6 +281,9 @@ export function evaluate3DObstacleCollision(
       // 3D Buildings & Hospital complexes
       const bldgTop = physicalHeight + vertBuffer;
       if (effectiveDist < buffer + 25) {
+        if (isDeparting && plannedCruiseAlt > bldgTop + 5) {
+          continue;
+        }
         if (droneAlt <= bldgTop) {
           const severity: 'critical' | 'warning' = effectiveDist < buffer ? 'critical' : 'warning';
           const rank = severity === 'critical' ? 1 : 2;
@@ -353,7 +366,7 @@ export function updateSimulationTick(
     }
 
     // If mission is already completed and docked at destination, maintain stabilized hover hold
-    if (drone.routeStatus === 'MISSION_COMPLETED' || drone.status === 'hovering') {
+    if (drone.routeStatus === 'MISSION_COMPLETED') {
       const destCoords = drone.missionDestinationCoords || [drone.vitals.longitude, drone.vitals.latitude];
       return {
         ...drone,
@@ -677,8 +690,9 @@ export function updateSimulationTick(
 
     // Predictive continuous segment check along the active upcoming route
     if (!conflictDetected && targetWp) {
-      const p1Metric = geoToMetric(newLng, newLat, newAlt);
-      const p2Metric = geoToMetric(targetWp.lng, targetWp.lat, targetWp.altitudeMeters || 65);
+      const p1Metric = geoToMetric(newLng, newLat, Math.max(30, newAlt));
+      const p2Metric = geoToMetric(targetWp.lng, targetWp.lat, Math.max(30, targetWp.altitudeMeters || 65));
+
       const segCheck = isSegment3DTraversable(p1Metric, p2Metric, updatedDrone, obstacles, officialAirspaceZones, drones, 25);
       if (!segCheck.traversable) {
         conflictDetected = true;

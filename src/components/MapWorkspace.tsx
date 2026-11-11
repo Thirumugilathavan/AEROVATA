@@ -135,23 +135,28 @@ const buildMarkerHtml = (
 
   return `
     <div style="
+      position: relative;
+      width: 80px;
+      height: 80px;
       display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: center;
+      pointer-events: auto;
       cursor: pointer;
       user-select: none;
-      transform: scale(${isSelected ? 1.22 : 1});
-      transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
-      position: relative;
     ">
       <!-- 1. CALLSIGN BILLBOARD BADGE (POSITIONED CLEANLY ABOVE DRONE) -->
       <div style="
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 50%;
+        transform: translateX(-50%);
+        pointer-events: none;
+        z-index: 10;
+        white-space: nowrap;
         display: flex;
         flex-direction: column;
         align-items: center;
-        margin-bottom: 4px;
-        pointer-events: none;
-        z-index: 10;
       ">
         <div style="
           background: rgba(8, 12, 22, 0.94);
@@ -203,6 +208,8 @@ const buildMarkerHtml = (
         display: flex;
         align-items: center;
         justify-content: center;
+        transform: scale(${isSelected ? 1.22 : 1});
+        transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
       ">
         <!-- Selection Halo Ring -->
         ${isSelected ? `
@@ -392,51 +399,65 @@ const buildMarkerHtml = (
 
       <!-- 3. TELEMETRY CAPSULE STRIP UNDERNEATH DRONE -->
       <div style="
-        background: rgba(10, 15, 26, 0.94);
-        border: 1px solid ${hasThreat ? threatColor : '#25344f'};
-        border-radius: 4px;
-        padding: 2px 7px;
-        margin-top: 3px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        backdrop-filter: blur(8px);
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 50%;
+        transform: translateX(-50%);
         pointer-events: none;
         z-index: 10;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+        white-space: nowrap;
       ">
-        <span style="color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
-          ALT: ${alt}m
-        </span>
-        <div style="width: 1px; height: 8px; background: #23334d;"></div>
-        <span style="color: ${baseColor}; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
-          ${speed} km/h
-        </span>
-        <div style="width: 1px; height: 8px; background: #23334d;"></div>
-        <span style="color: ${batColor}; font-size: 10px; font-weight: 700; font-family: ui-monospace, monospace;">
-          ${bat}%
-        </span>
+        <div style="
+          background: rgba(10, 15, 26, 0.94);
+          border: 1px solid ${hasThreat ? threatColor : '#25344f'};
+          border-radius: 4px;
+          padding: 2px 7px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          backdrop-filter: blur(8px);
+          box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+        ">
+          <span style="color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
+            ALT: ${alt}m
+          </span>
+          <div style="width: 1px; height: 8px; background: #23334d;"></div>
+          <span style="color: ${baseColor}; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
+            ${speed} km/h
+          </span>
+          <div style="width: 1px; height: 8px; background: #23334d;"></div>
+          <span style="color: ${batColor}; font-size: 10px; font-weight: 700; font-family: ui-monospace, monospace;">
+            ${bat}%
+          </span>
+        </div>
       </div>
 
       <!-- 4. ACTIVE THREAT BANNER -->
       ${hasThreat ? `
         <div style="
-          margin-top: 3px;
-          background: rgba(220, 38, 38, 0.95);
-          color: #ffffff;
-          font-family: ui-monospace, monospace;
-          font-size: 9px;
-          font-weight: 800;
-          padding: 2px 6px;
-          border-radius: 3px;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          border: 1px solid #f87171;
-          box-shadow: 0 0 10px rgba(239, 68, 68, 0.85);
+          position: absolute;
+          top: calc(100% + 28px);
+          left: 50%;
+          transform: translateX(-50%);
           pointer-events: none;
           z-index: 10;
+          white-space: nowrap;
         ">
-          ${drone.isRerouting ? 'A* REROUTE ACTIVE' : activeConflict ? `COLLISION RISK: ${activeConflict.obstacleName.substring(0, 14)} (${activeConflict.horizontalDistanceMeters}m)` : `${drone.airspaceStatus}: AIRSPACE HAZARD`}
+          <div style="
+            background: rgba(220, 38, 38, 0.95);
+            color: #ffffff;
+            font-family: ui-monospace, monospace;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 3px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border: 1px solid #f87171;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.85);
+          ">
+            ${drone.isRerouting ? 'A* REROUTE ACTIVE' : activeConflict ? `COLLISION RISK: ${activeConflict.obstacleName.substring(0, 14)} (${activeConflict.horizontalDistanceMeters}m)` : `${drone.airspaceStatus}: AIRSPACE HAZARD`}
+          </div>
         </div>
       ` : ''}
     </div>
@@ -1349,6 +1370,11 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (!marker) {
         const el = document.createElement('div');
         el.className = 'drone-marker-container';
+        el.style.width = '80px';
+        el.style.height = '80px';
+        el.style.position = 'absolute';
+        el.style.pointerEvents = 'auto';
+        el.style.cursor = 'pointer';
         el.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict, themeColor);
 
         el.addEventListener('click', (e) => {
@@ -1359,6 +1385,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         marker = new maplibregl.Marker({
           element: el,
           anchor: 'center',
+          pitchAlignment: 'viewport',
+          rotationAlignment: 'viewport',
         })
           .setLngLat([drone.vitals.longitude, drone.vitals.latitude])
           .addTo(map);
@@ -1475,7 +1503,6 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         el.innerHTML = `
           <div style="
             position: relative;
-            transform: translate(-50%, -50%);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1503,7 +1530,6 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         el.innerHTML = `
           <div style="
             position: relative;
-            transform: translate(-50%, -50%);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -1616,7 +1642,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         }
 
         el.innerHTML = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
             ${pulseRing}
             <div style="
               position: relative;
@@ -1737,7 +1763,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       const eta = drone.etaSecondsRemaining !== undefined ? `${Math.ceil(drone.etaSecondsRemaining / 60)}m` : '';
 
       const markerHtml = `
-        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; transform: translate(-50%, -100%); position: relative;">
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; position: relative;">
           ${isSelected ? `
             <div style="
               position: absolute;
@@ -1870,7 +1896,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       const el = document.createElement('div');
       el.className = 'temp-destination-pin';
       el.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none; transform: translate(-50%, -100%); position: relative;">
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none; position: relative;">
           <div style="
             position: absolute;
             bottom: 0;

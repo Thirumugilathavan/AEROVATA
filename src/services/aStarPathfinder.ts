@@ -470,7 +470,7 @@ export function calculateAStarReroute(
   const multiRes = calculateDroneMultiRoute(currentPos, destCoords, {
     startName,
     destName,
-    cruiseAltMeters: drone.vitals.altitudeMeters || 65,
+    cruiseAltMeters: drone.configuredCruiseAltitudeMeters || (drone.route && drone.route[1] ? drone.route[1].altitudeMeters : 0) || 65,
     safetyMarginMeters: 35,
     checkpointSpacingMeters: drone.checkpointSpacingMeters || 100,
     obstacles,

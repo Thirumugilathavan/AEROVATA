@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone, DroneStatus, Waypoint, RouteCandidate } from '../types/fleet';
+import { getBearingDegrees } from '../services/telemetryEngine';
 import { 
   COIMBATORE_LOCATIONS, 
   DEFAULT_STARTING_LOCATION, 
@@ -200,6 +201,7 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
       status: initialDroneStatus,
       statusLabel,
       currentWaypointIndex: 0,
+      targetWaypointIndex: 1,
       flightHours: 0.0,
       lastMaintenance: new Date().toISOString().split('T')[0],
       isPaused: false,
@@ -215,7 +217,10 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
       flightTrail: [startLoc.coordinates],
       completedRouteWaypoints: [],
       blockedRouteWaypoints: [],
-      route: routeResult.waypoints,
+      route: routeResult.waypoints.map((wp, idx) => ({
+        ...wp,
+        status: idx === 0 ? 'completed' : idx === 1 ? 'active' : 'upcoming',
+      })),
       routeCandidates: multiRouteResult?.allCandidates || (routeResult.candidates || []),
       selectedCandidateId: selectedCandidateId,
       checkpointSpacingMeters: checkpointSpacing,
@@ -226,10 +231,17 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
         batteryPercentage: 100,
         batteryVoltage: 25.2,
         estimatedFlightTimeMinutes: modelObj.enduranceMin,
-        altitudeMeters: 0, // Starts on landing pad
-        groundSpeedKmh: 0,
+        altitudeMeters: initialStatus === 'READY' ? cruiseAltitude : 0,
+        groundSpeedKmh: initialStatus === 'READY' ? 48.0 : 0,
         verticalSpeedMs: 0,
-        headingDegrees: 0,
+        headingDegrees: Math.round(
+          getBearingDegrees(
+            startLoc.coordinates[1],
+            startLoc.coordinates[0],
+            routeResult.waypoints[1]?.lat || destCoords[1],
+            routeResult.waypoints[1]?.lng || destCoords[0]
+          )
+        ),
         latitude: startLoc.coordinates[1],
         longitude: startLoc.coordinates[0],
         gpsFix: 'RTK_FIX',
