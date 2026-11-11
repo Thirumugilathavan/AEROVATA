@@ -62,6 +62,9 @@ import { NextWaypointCard } from './NextWaypointCard';
 import { GeofenceWarningBanner } from './GeofenceWarningBanner';
 import { AltitudeProfileStrip } from './AltitudeProfileStrip';
 import { DESIGN_TOKENS } from '../styles/designTokens';
+import { MapReadinessStatus } from '../types/loading';
+import { useLoading } from '../context/LoadingContext';
+import { MapLoadingOverlay } from './loading/MapLoadingOverlay';
 
 interface MapWorkspaceProps {
   drones: Drone[];
@@ -90,6 +93,7 @@ interface MapWorkspaceProps {
   onMapPickDestination?: (coords: [number, number]) => void;
   tempDestinationCoords?: [number, number] | null;
   isSimulationMode?: boolean;
+  onMapReadinessChange?: (status: MapReadinessStatus) => void;
 }
 
 const DRONE_THEME_COLORS: Record<string, string> = {
@@ -510,7 +514,9 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   onMapPickDestination,
   tempDestinationCoords,
   isSimulationMode = true,
+  onMapReadinessChange,
 }) => {
+  const { startOperation, finishOperation, isBusy, activeMapOperation, cancelOperation } = useLoading();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<{ [key: string]: maplibregl.Marker }>({});
@@ -756,9 +762,49 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       });
     };
 
+    // Notify startup screen: Phase 1 - initializing
+    onMapReadinessChange?.({
+      phase: 'initializing',
+      progress: 20,
+      message: 'Initializing flight environment...',
+      isReady: false,
+    });
+
+    let hasLoadedLayers = false;
+    let hasMarkedReady = false;
+    let idleFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let moveRaf: number | null = null;
+    let pitchRaf: number | null = null;
+    let bearingRaf: number | null = null;
+
+    const markMapReady = () => {
+      if (hasMarkedReady) return;
+      hasMarkedReady = true;
+      if (idleFallbackTimer) {
+        clearTimeout(idleFallbackTimer);
+        idleFallbackTimer = null;
+      }
+      onMapReadinessChange?.({
+        phase: 'ready',
+        progress: 100,
+        message: 'Command Center Ready',
+        isReady: true,
+      });
+    };
+
+    map.on('style.load', () => {
+      onMapReadinessChange?.({
+        phase: 'style_loading',
+        progress: 40,
+        message: 'Loading base cartography & terrain elevation...',
+        isReady: false,
+      });
+    });
+
     map.on('load', () => {
       (window as any).__map = map;
       initMapLayers(map);
+      hasLoadedLayers = true;
       
       try {
         map.setLight({
@@ -771,11 +817,48 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
 
       setIsMapLoaded(true);
       updateAirspaceForViewport();
+
+      onMapReadinessChange?.({
+        phase: 'layers_ready',
+        progress: 70,
+        message: 'Synthesizing 3D urban buildings & airspace zones...',
+        isReady: false,
+      });
+
+      onMapReadinessChange?.({
+        phase: 'tiles_loading',
+        progress: 88,
+        message: 'Rendering spatial terrain & visible tiles...',
+        isReady: false,
+      });
+
+      // Wait for MapLibre idle event when visible tiles & layers finish rendering
+      map.once('idle', markMapReady);
+
+      // Safe fallback timer: ensures user is never trapped by slow/throttled tile servers
+      idleFallbackTimer = setTimeout(markMapReady, 4500);
     });
 
+    map.on('error', (e) => {
+      if (!isMapLoaded && (e.error?.message?.includes('WebGL') || e.error?.message?.includes('context lost'))) {
+        onMapReadinessChange?.({
+          phase: 'error',
+          progress: 100,
+          message: 'WebGL Hardware Initialization Error',
+          error: e.error?.message || 'WebGL context failure occurred during map initialization.',
+          isReady: false,
+        });
+      }
+    });
+
+    // Throttled map interaction events using requestAnimationFrame to eliminate redundant React renders
     map.on('move', () => {
-      const center = map.getCenter();
-      setCurrentCenter([center.lng, center.lat]);
+      if (moveRaf !== null) return;
+      moveRaf = requestAnimationFrame(() => {
+        const center = map.getCenter();
+        setCurrentCenter([center.lng, center.lat]);
+        moveRaf = null;
+      });
     });
 
     map.on('moveend', () => {
@@ -783,11 +866,21 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
     });
 
     map.on('pitch', () => {
-      setCurrentPitch(Math.round(map.getPitch()));
+      if (pitchRaf !== null) return;
+      pitchRaf = requestAnimationFrame(() => {
+        const p = Math.round(map.getPitch());
+        setCurrentPitch((prev) => (prev !== p ? p : prev));
+        pitchRaf = null;
+      });
     });
 
     map.on('rotate', () => {
-      setCurrentBearing(Math.round(map.getBearing()));
+      if (bearingRaf !== null) return;
+      bearingRaf = requestAnimationFrame(() => {
+        const b = Math.round(map.getBearing());
+        setCurrentBearing((prev) => (prev !== b ? b : prev));
+        bearingRaf = null;
+      });
     });
 
     map.on('dragstart', () => {
@@ -799,6 +892,10 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
     (window as any).__getDynamicBuildingObstacles = () => getDynamicBuildingObstacles(mapRef.current);
 
     return () => {
+      if (idleFallbackTimer) clearTimeout(idleFallbackTimer);
+      if (moveRaf) cancelAnimationFrame(moveRaf);
+      if (pitchRaf) cancelAnimationFrame(pitchRaf);
+      if (bearingRaf) cancelAnimationFrame(bearingRaf);
       resizeObserver.disconnect();
       Object.values(markersRef.current).forEach((m) => m.remove());
       markersRef.current = {};
@@ -840,6 +937,15 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       map.easeTo({ pitch: 62, bearing: -25, duration: 800 });
     }
   }, [viewMode]);
+
+  const handleSetMapStyle = (newStyle: 'satellite' | 'dark') => {
+    if (newStyle === mapStyle) return;
+    startOperation('map-style', `Applying ${newStyle === 'satellite' ? 'Satellite 3D' : 'OpenFreeMap 3D'} imagery...`, 'map');
+    setMapStyle(newStyle);
+    setTimeout(() => {
+      finishOperation('map-style');
+    }, 450);
+  };
 
   // Handler: Locate / Focus Selected Drone on Demand
   const handleFocusSelectedDrone = () => {
@@ -2914,19 +3020,35 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
   };
   const handleJumpToCity = (sector: MetroSector | 'unverified') => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || isBusy('sector-jump')) return;
     setAutoFollow(false);
 
-    if (sector === 'unverified') {
+    const isUnverified = sector === 'unverified';
+    const sectorName = isUnverified ? 'Central Unmapped Region' : `${sector.name} (${sector.shortCode})`;
+
+    startOperation(
+      'sector-jump',
+      `Switching to ${sectorName}...`,
+      'map',
+      true,
+      () => map.stop()
+    );
+
+    const onFlyComplete = () => {
+      finishOperation('sector-jump');
+    };
+
+    if (isUnverified) {
       map.flyTo({
         center: [78.5500, 21.0500],
         zoom: 12.0,
         pitch: 45,
         bearing: -15,
-        duration: 2000,
+        duration: 1800,
         essential: true,
       });
       setActiveSectorId('unverified');
+      map.once('moveend', onFlyComplete);
       return;
     }
 
@@ -2935,10 +3057,11 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       zoom: sector.defaultZoom,
       pitch: viewMode === '3d' ? 58 : 0,
       bearing: viewMode === '3d' ? -20 : 0,
-      duration: 2000,
+      duration: 1800,
       essential: true,
     });
     setActiveSectorId(sector.id);
+    map.once('moveend', onFlyComplete);
   };
   const handleNadir2D = () => {
     setViewMode('2d');
@@ -2964,6 +3087,9 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         officialAirspaceZones={officialAirspaceZones || OFFICIAL_COIMBATORE_AIRSPACE_ZONES}
         obstacleConflicts={obstacleConflicts}
       />
+
+      {/* ─── LOCALIZED MAP ACTION LOADING OVERLAY ─── */}
+      <MapLoadingOverlay operation={activeMapOperation} onCancel={cancelOperation} />
 
       {/* ─── TOP LEFT: AIRSPACE IDENTIFIER & DATA FRESHNESS ─── */}
       <div className="absolute top-3 left-3 z-10 flex flex-col gap-2 pointer-events-none">
@@ -3092,7 +3218,10 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             <button
               key={sector.id}
               onClick={() => handleJumpToCity(sector)}
+              disabled={isBusy('sector-jump')}
               className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                isBusy('sector-jump') ? 'opacity-50 cursor-not-allowed' : ''
+              } ${
                 activeSectorId === sector.id
                   ? 'bg-cyan-500 text-slate-950 font-extrabold shadow-[0_0_8px_rgba(6,182,212,0.6)]'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
@@ -3105,7 +3234,10 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           <div className="w-[1px] h-3.5 bg-[#1f2a40] mx-0.5" />
           <button
             onClick={() => handleJumpToCity('unverified')}
+            disabled={isBusy('sector-jump')}
             className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+              isBusy('sector-jump') ? 'opacity-50 cursor-not-allowed' : ''
+            } ${
               activeSectorId === 'unverified'
                 ? 'bg-amber-500 text-slate-950 font-extrabold shadow-[0_0_8px_rgba(245,158,11,0.6)]'
                 : 'text-amber-400/80 hover:text-amber-300 hover:bg-amber-950/50'
@@ -3444,7 +3576,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
                 <span className="text-[10px] text-slate-400 font-bold uppercase">Basemap Theme:</span>
                 <div className="flex gap-1">
                   <button
-                    onClick={() => setMapStyle('dark')}
+                    onClick={() => handleSetMapStyle('dark')}
                     className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
                       mapStyle === 'dark' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'
                     }`}
@@ -3453,7 +3585,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
                     OpenFreeMap 3D
                   </button>
                   <button
-                    onClick={() => setMapStyle('satellite')}
+                    onClick={() => handleSetMapStyle('satellite')}
                     className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
                       mapStyle === 'satellite' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'
                     }`}

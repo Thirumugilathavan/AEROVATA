@@ -15,6 +15,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { QuadcopterIcon } from './icons/QuadcopterIcon';
+import { LoadingSpinner } from './loading/LoadingSpinner';
 import { Drone, DroneStatus, Waypoint, RouteCandidate } from '../types/fleet';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { getBearingDegrees } from '../services/telemetryEngine';
@@ -77,6 +78,7 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
   // Route calculation state
   const [routeResult, setRouteResult] = useState<DroneAStarRouteResult | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Sync auto-generated names when existing drones count changes
   useEffect(() => {
@@ -111,58 +113,61 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
   // Calculate Multi-Candidate A* Routes with Adaptive Checkpoints
   const computeRoute = () => {
     setIsCalculating(true);
-    try {
-      const dynamicObs = typeof window !== 'undefined' && (window as any).__getDynamicBuildingObstacles
-        ? (window as any).__getDynamicBuildingObstacles()
-        : [];
-      const combinedObs = dynamicObs.length > 0 ? [...COIMBATORE_DETAILED_OBSTACLES, ...dynamicObs] : undefined;
+    // Yield to let React paint the calculating state before synchronous A* calculations run
+    setTimeout(() => {
+      try {
+        const dynamicObs = typeof window !== 'undefined' && (window as any).__getDynamicBuildingObstacles
+          ? (window as any).__getDynamicBuildingObstacles()
+          : [];
+        const combinedObs = dynamicObs.length > 0 ? [...COIMBATORE_DETAILED_OBSTACLES, ...dynamicObs] : undefined;
 
-      const multi = calculateDroneMultiRoute(startLoc.coordinates, destCoords, {
-        startName: startLoc.name,
-        destName,
-        cruiseAltMeters: cruiseAltitude,
-        safetyMarginMeters: 35,
-        checkpointSpacingMeters: checkpointSpacing,
-        obstacles: combinedObs,
-      });
-      setMultiRouteResult(multi);
-
-      if (multi.success && multi.primaryRoute) {
-        // Find selected candidate or fallback to primary
-        const chosen = multi.allCandidates.find((c: RouteCandidate) => c.id === selectedCandidateId) || multi.primaryRoute;
-        setSelectedCandidateId(chosen.id);
-
-        setRouteResult({
-          success: true,
-          coordinates: chosen.coordinates,
-          waypoints: chosen.waypoints,
-          distanceKm: chosen.distanceKm,
-          estimatedMinutes: chosen.simulatedMinutes,
-          candidates: multi.allCandidates,
-          validation: chosen.validation,
+        const multi = calculateDroneMultiRoute(startLoc.coordinates, destCoords, {
+          startName: startLoc.name,
+          destName,
+          cruiseAltMeters: cruiseAltitude,
+          safetyMarginMeters: 35,
+          checkpointSpacingMeters: checkpointSpacing,
+          obstacles: combinedObs,
         });
-      } else {
+        setMultiRouteResult(multi);
+
+        if (multi.success && multi.primaryRoute) {
+          // Find selected candidate or fallback to primary
+          const chosen = multi.allCandidates.find((c: RouteCandidate) => c.id === selectedCandidateId) || multi.primaryRoute;
+          setSelectedCandidateId(chosen.id);
+
+          setRouteResult({
+            success: true,
+            coordinates: chosen.coordinates,
+            waypoints: chosen.waypoints,
+            distanceKm: chosen.distanceKm,
+            estimatedMinutes: chosen.simulatedMinutes,
+            candidates: multi.allCandidates,
+            validation: chosen.validation,
+          });
+        } else {
+          setRouteResult({
+            success: false,
+            coordinates: [],
+            waypoints: [],
+            distanceKm: 0,
+            estimatedMinutes: 0,
+            error: multi.error || 'A* pathfinding could not find a safe collision-free corridor.',
+          });
+        }
+      } catch (err: any) {
         setRouteResult({
           success: false,
           coordinates: [],
           waypoints: [],
           distanceKm: 0,
           estimatedMinutes: 0,
-          error: multi.error || 'A* pathfinding could not find a safe collision-free corridor.',
+          error: err?.message || 'A* pathfinding encountered an unexpected computation error.',
         });
+      } finally {
+        setIsCalculating(false);
       }
-    } catch (err: any) {
-      setRouteResult({
-        success: false,
-        coordinates: [],
-        waypoints: [],
-        distanceKm: 0,
-        estimatedMinutes: 0,
-        error: err?.message || 'A* pathfinding encountered an unexpected computation error.',
-      });
-    } finally {
-      setIsCalculating(false);
-    }
+    }, 25);
   };
 
   // Recompute route automatically whenever locations change
@@ -194,7 +199,11 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
 
   // Form submission handler
   const handleConfirmAdd = () => {
+    if (isSubmitting || isCalculating) return;
     if (!routeResult || !routeResult.success || routeResult.waypoints.length < 2) return;
+
+    setIsSubmitting(true);
+    try {
 
     const modelObj = DRONE_MODELS.find((m) => m.name === selectedModel) || DRONE_MODELS[0];
     const initialDroneStatus: DroneStatus = initialStatus === 'READY' ? 'active' : 'standby';
@@ -283,8 +292,11 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
       },
     };
 
-    onAddDrone(newDrone);
-    onClose();
+      onAddDrone(newDrone);
+      onClose();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -553,15 +565,34 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
               <button
                 type="button"
                 onClick={computeRoute}
-                disabled={isCalculating}
-                className="px-2.5 py-1 rounded bg-[#152033] hover:bg-[#1b2840] border border-cyan-500/40 text-cyan-300 text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
+                disabled={isCalculating || isSubmitting}
+                className="px-2.5 py-1 rounded bg-[#152033] hover:bg-[#1b2840] border border-cyan-500/40 text-cyan-300 text-[10px] font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
               >
-                <Sparkles className="w-3 h-3 text-cyan-400" />
-                <span>{isCalculating ? 'Computing Alternatives...' : 'Recalculate Routes'}</span>
+                {isCalculating ? (
+                  <>
+                    <LoadingSpinner size="xs" color="text-cyan-400" />
+                    <span>Computing Alternatives...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3 h-3 text-cyan-400" />
+                    <span>Recalculate Routes</span>
+                  </>
+                )}
               </button>
             </div>
 
-            {multiRouteResult && multiRouteResult.success && multiRouteResult.allCandidates.length > 0 ? (
+            {isCalculating ? (
+              <div className="py-10 flex flex-col items-center justify-center gap-2.5 bg-[#090e18] border border-cyan-500/20 rounded-lg">
+                <LoadingSpinner size="md" color="text-cyan-400" />
+                <div className="text-xs font-mono text-cyan-300 font-bold tracking-wide">
+                  Calculating 3D Obstacle Clearance Corridors...
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono">
+                  Evaluating DGCA airspace, building envelopes, and multi-candidate paths
+                </div>
+              </div>
+            ) : multiRouteResult && multiRouteResult.success && multiRouteResult.allCandidates.length > 0 ? (
               <div className="space-y-3">
                 <div className="text-[10px] text-slate-400 uppercase font-mono font-bold tracking-wider">
                   Select Flight Corridor Strategy ({multiRouteResult.allCandidates.length} Valid Options Calculated)
@@ -665,15 +696,29 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
           <button
             type="button"
             onClick={handleConfirmAdd}
-            disabled={!routeResult || !routeResult.success}
+            disabled={!routeResult || !routeResult.success || isCalculating || isSubmitting}
             className={`px-5 py-2 rounded-lg font-mono font-bold text-xs flex items-center gap-2 transition-all ${
-              routeResult && routeResult.success
+              routeResult && routeResult.success && !isCalculating && !isSubmitting
                 ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-[0_0_20px_rgba(0,240,255,0.4)] cursor-pointer'
                 : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
             }`}
           >
-            <QuadcopterIcon size={16} />
-            <span>+ Add Drone to Fleet</span>
+            {isSubmitting ? (
+              <>
+                <LoadingSpinner size="xs" color="text-slate-950" />
+                <span>Deploying Aircraft...</span>
+              </>
+            ) : isCalculating ? (
+              <>
+                <LoadingSpinner size="xs" color="text-slate-400" />
+                <span>Calculating Route...</span>
+              </>
+            ) : (
+              <>
+                <QuadcopterIcon size={16} />
+                <span>+ Add Drone to Fleet</span>
+              </>
+            )}
           </button>
         </div>
       </div>
