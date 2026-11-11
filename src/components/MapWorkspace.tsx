@@ -1148,12 +1148,12 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
               'interpolate',
               ['linear'],
               ['min', 120, ['coalesce', ['get', 'render_height'], ['get', 'height'], 6.4]],
-              0, '#0f172a',
-              6, '#0284c7',
-              15, '#0ea5e9',
-              35, '#38bdf8',
-              60, '#67e8f9',
-              100, '#a5f3fc'
+              0, '#1e293b',
+              6, '#334155',
+              15, '#475569',
+              35, '#64748b',
+              60, '#94a3b8',
+              100, '#cbd5e1'
             ],
             // Use actual mapped heights from OpenFreeMap vector tiles (render_height in meters).
             // Checked against render_height, height, and levels (3.2m/floor), clamped to realistic urban limits [3.2m - 150m].
@@ -1251,14 +1251,14 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           'line-color': [
             'case',
             ['boolean', ['feature-state', 'conflict'], false], '#ef4444',
-            '#38bdf8'
+            '#64748b'
           ],
           'line-width': 2.8,
           'line-opacity': 0.92,
         },
       });
 
-      // 4C. Prominent 3D Buildings Extrusion (Verified Physical Heights, Capped Realistically)
+      // 4C. Prominent 3D Buildings Extrusion (Verified Physical Heights, Capped Realistically, Modern Grey Palette)
       map.addLayer({
         id: '3d-obstacles-extrusion',
         type: 'fill-extrusion',
@@ -1268,7 +1268,15 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           'fill-extrusion-color': [
             'case',
             ['boolean', ['feature-state', 'conflict'], false], '#ef4444',
-            ['get', 'color']
+            ['interpolate',
+              ['linear'],
+              ['coalesce', ['get', 'physical_height'], ['get', 'height'], 24.0],
+              6, '#334155',
+              15, '#475569',
+              35, '#64748b',
+              60, '#94a3b8',
+              100, '#cbd5e1'
+            ]
           ],
           'fill-extrusion-height': [
             'min',
@@ -1276,7 +1284,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             ['max', 6.0, ['coalesce', ['get', 'physical_height'], ['get', 'height'], 24.0]]
           ],
           'fill-extrusion-base': 0,
-          'fill-extrusion-opacity': 0.92,
+          'fill-extrusion-opacity': 0.90,
         },
       });
 
@@ -1286,8 +1294,8 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         type: 'line',
         source: 'coimbatore-obstacles',
         paint: {
-          'line-color': '#155E75',
-          'line-width': 2.0,
+          'line-color': '#475569',
+          'line-width': 1.5,
         },
       });
     }
