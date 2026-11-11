@@ -1514,6 +1514,9 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       const color = isSelected ? '#00f0ff' : themeColor;
       const lineWidth = isSelected ? 5.5 : 2.0;
       const lineOpacity = isSelected ? 1.0 : 0.35;
+      const targetIdx = drone.targetWaypointIndex !== undefined
+        ? drone.targetWaypointIndex
+        : (drone.currentWaypointIndex === 0 && drone.route.length > 1 ? 1 : drone.currentWaypointIndex);
 
       // 1. Original route (faded if rerouted, 2D view only)
       if (viewMode !== '3d' && drone.originalRoute && drone.originalRoute.length >= 2) {
@@ -1587,43 +1590,49 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           }
         }
 
-        // 3D Waypoint Vertical Pylon Columns & Hovering Node Pads (True 3D Spatial Anchors)
-        drone.route.forEach((wp) => {
+        // 3D Waypoint Anchors & Hovering Node Beads (True 3D Spatial Anchors)
+        drone.route.forEach((wp, wpIdx) => {
           const wpAlt = wp.altitudeMeters || 65;
-          const pylonRadius = 0.000015; // ~1.6m radius vertical column
-          const nodeRadius = 0.000045;  // ~4.8m radius aerial node pad
+          const isTakeoff = wpIdx === 0;
+          const isLanding = wpIdx === drone.route.length - 1;
+          const isCurrentTarget = wpIdx === targetIdx;
 
-          // 1. Vertical Pylon Column (Ground Z=0 to Waypoint Altitude Z=wpAlt)
-          features.push({
-            type: 'Feature',
-            properties: {
-              type: 'pylon-3d',
-              is3d: true,
-              color: isSelected ? '#00f0ff' : color,
-              base: 0,
-              height: Math.max(1, wpAlt - 1.5),
-            },
-            geometry: {
-              type: 'Polygon',
-              coordinates: [[
-                [wp.lng - pylonRadius, wp.lat - pylonRadius],
-                [wp.lng + pylonRadius, wp.lat - pylonRadius],
-                [wp.lng + pylonRadius, wp.lat + pylonRadius],
-                [wp.lng - pylonRadius, wp.lat + pylonRadius],
-                [wp.lng - pylonRadius, wp.lat - pylonRadius],
-              ]],
-            },
-          });
+          // 1. Vertical Pylon Anchor Column (Ground to Altitude) - ONLY at Takeoff & Landing Pads!
+          // NEVER at intermediate cruise waypoints to ensure flight corridors cleanly float above buildings without piercing roofs or interiors!
+          if (isTakeoff || isLanding) {
+            const pylonRadius = 0.000018; // ~2m radius pad beacon
+            features.push({
+              type: 'Feature',
+              properties: {
+                type: 'pylon-3d',
+                is3d: true,
+                color: isLanding ? '#f43f5e' : (isSelected ? '#00f0ff' : color),
+                base: 0,
+                height: Math.max(1, wpAlt - 0.5),
+              },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [[
+                  [wp.lng - pylonRadius, wp.lat - pylonRadius],
+                  [wp.lng + pylonRadius, wp.lat - pylonRadius],
+                  [wp.lng + pylonRadius, wp.lat + pylonRadius],
+                  [wp.lng - pylonRadius, wp.lat + pylonRadius],
+                  [wp.lng - pylonRadius, wp.lat - pylonRadius],
+                ]],
+              },
+            });
+          }
 
-          // 2. Aerial Hovering Waypoint Node Pad (at Cruise Altitude)
+          // 2. Aerial Checkpoint Bead along the 3D Ribbon (Tactical 3D Node Anchor hovering safely above buildings)
+          const nodeRadius = isCurrentTarget ? 0.000022 : 0.000012; // Sleek, non-congested ~1.3m radius bead
           features.push({
             type: 'Feature',
             properties: {
               type: 'node-3d',
               is3d: true,
-              color: isSelected ? '#38bdf8' : color,
-              base: Math.max(0, wpAlt - 1.8),
-              height: wpAlt + 2.2,
+              color: isCurrentTarget ? '#ffffff' : (isSelected ? '#00f0ff' : color),
+              base: Math.max(0, wpAlt - 0.8),
+              height: wpAlt + 1.2,
             },
             geometry: {
               type: 'Polygon',
@@ -1662,8 +1671,8 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         });
       }
 
-      // 3. Traveled flight trail
-      if (drone.flightTrail && drone.flightTrail.length >= 2) {
+      // 3. Traveled flight trail (2D mode only to prevent cutting through 3D buildings)
+      if (viewMode !== '3d' && drone.flightTrail && drone.flightTrail.length >= 2) {
         features.push({
           type: 'Feature',
           properties: { color, type: 'trail', lineWidth: lineWidth * 0.85, lineOpacity: lineOpacity * 0.9 },
@@ -1876,7 +1885,14 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       map.setLayoutProperty(
         'flight-routes-trail',
         'visibility',
-        layerPlannedRoutes ? 'visible' : 'none'
+        layerPlannedRoutes && viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('proposed-route-line')) {
+      map.setLayoutProperty(
+        'proposed-route-line',
+        'visibility',
+        viewMode !== '3d' ? 'visible' : 'none'
       );
     }
     if (map.getLayer('flight-routes-3d-corridor')) {
@@ -1966,7 +1982,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       let pulseRing = '';
 
       if (isReached && !isSelected) {
-        // Compact PASSED Checkpoint Dot (clutter-reduction)
+        // Sleek Minimalist PASSED Checkpoint Point (declutter-reduction)
         el.innerHTML = `
           <div style="
             position: relative;
@@ -1974,59 +1990,73 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             align-items: center;
             justify-content: center;
             cursor: pointer;
+            width: 14px;
+            height: 14px;
           " title="${wp.name} [PASSED] • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
             <div style="
-              width: 14px;
-              height: 14px;
+              width: 6px;
+              height: 6px;
               border-radius: 50%;
               background: #10b981;
-              border: 1.5px solid #064e3b;
-              box-shadow: 0 0 8px rgba(16,185,129,0.5);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              color: #022c1b;
-              font-size: 8px;
-              font-weight: 900;
-              font-family: monospace;
-            ">✓</div>
+              border: 1px solid #022c1b;
+              box-shadow: 0 0 4px rgba(16, 185, 129, 0.7);
+            "></div>
           </div>
         `;
       } else if (!isCurrentLeg && !isDestination && !isSelected) {
-        // Upcoming Transit Checkpoint (Tactical Compact Pill Badge)
+        // Sleek Tactical Checkpoint Point (Small Point Design for Decluttered Flight View)
         el.innerHTML = `
           <div style="
             position: relative;
             display: flex;
-            flex-direction: column;
             align-items: center;
+            justify-content: center;
             cursor: pointer;
-            transition: transform 0.15s ease;
-          " title="${wp.name} • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
+            width: 16px;
+            height: 16px;
+            transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+          " title="WP-${wpNumber} • ${wp.name} • Alt: ${wp.altitudeMeters}m AGL • Coords: ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E">
             <div style="
-              display: flex;
-              align-items: center;
-              gap: 3px;
-              background: rgba(12, 17, 28, 0.94);
-              border: 1.5px solid #38bdf8;
-              padding: 1.5px 5px;
-              border-radius: 10px;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.8);
-              backdrop-filter: blur(4px);
-            ">
-              <span style="
-                color: #38bdf8;
-                font-family: ui-monospace, SFMono-Regular, monospace;
-                font-size: 9px;
-                font-weight: 800;
-              ">${wpNumber}</span>
-              <span style="
-                color: #94a3b8;
-                font-family: ui-monospace, monospace;
-                font-size: 8px;
-                font-weight: 600;
-              ">${wp.altitudeMeters}m</span>
-            </div>
+              width: 7px;
+              height: 7px;
+              border-radius: 50%;
+              background: #00f0ff;
+              border: 1.5px solid #021a24;
+              box-shadow: 0 0 6px rgba(0, 240, 255, 0.9);
+              transition: transform 0.15s ease, box-shadow 0.15s ease;
+            "></div>
+          </div>
+        `;
+      } else if (isDestination && !isSelected) {
+        // Sleek Destination Pad Point
+        el.innerHTML = `
+          <div style="
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            width: 20px;
+            height: 20px;
+          " title="DESTINATION PAD: ${wp.name} • Alt: ${wp.altitudeMeters}m AGL (${formattedDist})">
+            <div style="
+              position: absolute;
+              width: 18px;
+              height: 18px;
+              border-radius: 50%;
+              border: 1.5px solid #f43f5e;
+              background: rgba(244, 63, 94, 0.2);
+              animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+              pointer-events: none;
+            "></div>
+            <div style="
+              width: 9px;
+              height: 9px;
+              border-radius: 50%;
+              background: #f43f5e;
+              border: 1.5px solid #ffffff;
+              box-shadow: 0 0 8px #f43f5e;
+            "></div>
           </div>
         `;
       } else {
@@ -2514,28 +2544,37 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             }
           }
 
-          // Pylons and nodes for checkpoints
-          checkpointMission.checkpoints.forEach((cp) => {
+          // Pylons and nodes for checkpoints (Zero ground pylons at cruise checkpoints above buildings)
+          checkpointMission.checkpoints.forEach((cp, cpIdx) => {
             const cpAlt = cp.altitudeMeters || 65;
-            const pylonR = 0.000015;
-            const nodeR = 0.000045;
+            const isTakeoff = cpIdx === 0;
+            const isLanding = cpIdx === checkpointMission.checkpoints.length - 1;
+            const isActive = cp.status === 'active';
+
+            // Vertical anchor column ONLY at takeoff and landing pads
+            if (isTakeoff || isLanding) {
+              const pylonR = 0.000018;
+              features.push({
+                type: 'Feature',
+                properties: { is3d: true, color: isLanding ? '#f43f5e' : '#00f0ff', base: 0, height: Math.max(1, cpAlt - 0.5) },
+                geometry: {
+                  type: 'Polygon',
+                  coordinates: [[
+                    [cp.lng - pylonR, cp.lat - pylonR],
+                    [cp.lng + pylonR, cp.lat - pylonR],
+                    [cp.lng + pylonR, cp.lat + pylonR],
+                    [cp.lng - pylonR, cp.lat + pylonR],
+                    [cp.lng - pylonR, cp.lat - pylonR],
+                  ]],
+                },
+              });
+            }
+
+            // Sleek checkpoint bead along the aerial corridor
+            const nodeR = isActive ? 0.000022 : 0.000012;
             features.push({
               type: 'Feature',
-              properties: { is3d: true, color: '#00f0ff', base: 0, height: Math.max(1, cpAlt - 1.5) },
-              geometry: {
-                type: 'Polygon',
-                coordinates: [[
-                  [cp.lng - pylonR, cp.lat - pylonR],
-                  [cp.lng + pylonR, cp.lat - pylonR],
-                  [cp.lng + pylonR, cp.lat + pylonR],
-                  [cp.lng - pylonR, cp.lat + pylonR],
-                  [cp.lng - pylonR, cp.lat - pylonR],
-                ]],
-              },
-            });
-            features.push({
-              type: 'Feature',
-              properties: { is3d: true, color: '#38bdf8', base: Math.max(0, cpAlt - 1.8), height: cpAlt + 2.2 },
+              properties: { is3d: true, color: isActive ? '#ffffff' : '#38bdf8', base: Math.max(0, cpAlt - 0.8), height: cpAlt + 1.2 },
               geometry: {
                 type: 'Polygon',
                 coordinates: [[
@@ -2564,6 +2603,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         const isError = checkpointMission.status === 'error';
 
         const el = document.createElement('div');
+        el.className = 'checkpoint-marker';
         el.style.cursor = 'pointer';
         el.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -2573,9 +2613,32 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         const badgeColor = isError ? '#f43f5e' : isActive ? '#00f0ff' : isReached ? '#10b981' : '#64748b';
         const bgBadge = isError ? '#881337' : isActive ? 'rgba(6,182,212,0.3)' : isReached ? 'rgba(16,185,129,0.3)' : 'rgba(30,41,59,0.9)';
 
-        el.innerHTML = `
-          <div style="display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 0 6px ${badgeColor}66);">
-            ${isActive ? `
+        if (!isActive) {
+          // Sleek tactical checkpoint point (small point design)
+          el.innerHTML = `
+            <div style="
+              position: relative;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+              width: 14px;
+              height: 14px;
+            " title="#${cp.sequence} • ${cp.name} • Alt: ${cp.altitudeMeters}m AGL">
+              <div style="
+                width: ${isReached ? '6px' : '7px'};
+                height: ${isReached ? '6px' : '7px'};
+                border-radius: 50%;
+                background: ${badgeColor};
+                border: 1.5px solid #021a24;
+                box-shadow: 0 0 5px ${badgeColor};
+                transition: transform 0.15s ease;
+              "></div>
+            </div>
+          `;
+        } else {
+          el.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 0 6px ${badgeColor}66);">
               <div style="
                 position: absolute;
                 width: 38px;
@@ -2586,45 +2649,45 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
                 animation: radar-pulse 2s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
                 pointer-events: none;
               "></div>
-            ` : ''}
-            <div style="
-              width: ${isActive ? '26px' : '22px'};
-              height: ${isActive ? '26px' : '22px'};
-              border-radius: 50%;
-              background: ${bgBadge};
-              border: 2px solid ${badgeColor};
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              color: #ffffff;
-              font-size: 11px;
-              font-weight: 800;
-              font-family: ui-monospace, monospace;
-              transition: all 0.25s ease;
-              box-shadow: 0 0 ${isActive ? '12px' : '6px'} ${badgeColor};
-            ">
-              ${isReached ? '✓' : cp.sequence}
+              <div style="
+                width: 26px;
+                height: 26px;
+                border-radius: 50%;
+                background: ${bgBadge};
+                border: 2px solid ${badgeColor};
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #ffffff;
+                font-size: 11px;
+                font-weight: 800;
+                font-family: ui-monospace, monospace;
+                transition: all 0.25s ease;
+                box-shadow: 0 0 12px ${badgeColor};
+              ">
+                ${isReached ? '✓' : cp.sequence}
+              </div>
+              <div style="
+                background: rgba(10,14,24,0.92);
+                border: 1px solid ${badgeColor};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 9px;
+                font-family: monospace;
+                color: #e2e8f0;
+                margin-top: 3px;
+                white-space: nowrap;
+                backdrop-filter: blur(6px);
+                display: flex;
+                gap: 4px;
+              ">
+                <span style="font-weight: 700; color: ${badgeColor};">#${cp.sequence}</span>
+                <span>${cp.name.split(' ').slice(0, 2).join(' ')}</span>
+                <span style="color: #38bdf8;">${cp.altitudeMeters}m</span>
+              </div>
             </div>
-            <div style="
-              background: rgba(10,14,24,0.92);
-              border: 1px solid ${badgeColor};
-              border-radius: 4px;
-              padding: 2px 6px;
-              font-size: 9px;
-              font-family: monospace;
-              color: #e2e8f0;
-              margin-top: 3px;
-              white-space: nowrap;
-              backdrop-filter: blur(6px);
-              display: flex;
-              gap: 4px;
-            ">
-              <span style="font-weight: 700; color: ${badgeColor};">#${cp.sequence}</span>
-              <span>${cp.name.split(' ').slice(0, 2).join(' ')}</span>
-              <span style="color: #38bdf8;">${cp.altitudeMeters}m</span>
-            </div>
-          </div>
-        `;
+          `;
+        }
 
         let cpPixelRise = 0;
         if (viewMode === '3d') {
