@@ -1590,7 +1590,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           }
         }
 
-        // 3D Waypoint Anchors & Hovering Node Beads (True 3D Spatial Anchors)
+        // 3D Waypoint Markings Directly In The Line & Vertipad Beacons
         drone.route.forEach((wp, wpIdx) => {
           const wpAlt = wp.altitudeMeters || 65;
           const isTakeoff = wpIdx === 0;
@@ -1623,30 +1623,72 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             });
           }
 
-          // 2. Aerial Checkpoint Bead along the 3D Ribbon (Tactical 3D Node Anchor hovering safely above buildings)
-          const nodeRadius = isCurrentTarget ? 0.000022 : 0.000012; // Sleek, non-congested ~1.3m radius bead
+          // 2. 3D Waypoint Marking Collar / Gate Embedded Directly In The Line
+          const prevWp = drone.route[Math.max(0, wpIdx - 1)];
+          const nextWp = drone.route[Math.min(drone.route.length - 1, wpIdx + 1)];
+          const dirX = (nextWp.lng - prevWp.lng) * Math.cos((wp.lat * Math.PI) / 180);
+          const dirY = nextWp.lat - prevWp.lat;
+          const dirLen = Math.hypot(dirX, dirY) || 1;
+          const tx = dirX / dirLen;
+          const ty = dirY / dirLen;
+          const nx = -ty; // Perpendicular normal
+          const ny = tx;
+
+          const gateHalfWidthDeg = isCurrentTarget ? 0.000065 : 0.000050; // ~5.5-7m across ribbon
+          const gateThicknessDeg = isCurrentTarget ? 0.000020 : 0.000014; // ~1.5-2m along ribbon
+          const cosLat = Math.cos((wp.lat * Math.PI) / 180);
+
+          const gP1 = [wp.lng + (nx * gateHalfWidthDeg + tx * gateThicknessDeg) / cosLat, wp.lat + (ny * gateHalfWidthDeg + ty * gateThicknessDeg)];
+          const gP2 = [wp.lng + (-nx * gateHalfWidthDeg + tx * gateThicknessDeg) / cosLat, wp.lat + (-ny * gateHalfWidthDeg + ty * gateThicknessDeg)];
+          const gP3 = [wp.lng + (-nx * gateHalfWidthDeg - tx * gateThicknessDeg) / cosLat, wp.lat + (-ny * gateHalfWidthDeg - ty * gateThicknessDeg)];
+          const gP4 = [wp.lng + (nx * gateHalfWidthDeg - tx * gateThicknessDeg) / cosLat, wp.lat + (ny * gateHalfWidthDeg - ty * gateThicknessDeg)];
+
+          const gateColor = isLanding ? '#f43f5e' : isCurrentTarget ? '#ffffff' : (wpIdx < targetIdx ? '#10b981' : '#38bdf8');
+          const gateBase = Math.max(0, wpAlt - (isCurrentTarget ? 1.0 : 0.5));
+          const gateHeight = wpAlt + (isCurrentTarget ? 2.8 : 1.8);
+
           features.push({
             type: 'Feature',
             properties: {
-              type: 'node-3d',
+              type: 'waypoint-3d-gate',
               is3d: true,
-              color: isCurrentTarget ? '#ffffff' : (isSelected ? '#00f0ff' : color),
-              base: Math.max(0, wpAlt - 0.8),
-              height: wpAlt + 1.2,
+              color: gateColor,
+              base: gateBase,
+              height: gateHeight,
             },
             geometry: {
               type: 'Polygon',
-              coordinates: [[
-                [wp.lng, wp.lat + nodeRadius],
-                [wp.lng + nodeRadius * 0.866, wp.lat + nodeRadius * 0.5],
-                [wp.lng + nodeRadius * 0.866, wp.lat - nodeRadius * 0.5],
-                [wp.lng, wp.lat - nodeRadius],
-                [wp.lng - nodeRadius * 0.866, wp.lat - nodeRadius * 0.5],
-                [wp.lng - nodeRadius * 0.866, wp.lat + nodeRadius * 0.5],
-                [wp.lng, wp.lat + nodeRadius],
-              ]],
+              coordinates: [[gP1, gP2, gP3, gP4, gP1]],
             },
           });
+        });
+
+        // 3. True 3D Drone Craft Geometry Directly On The 3D Line (Drone follows the 3D line in WebGL space)
+        const dAlt = drone.vitals.altitudeMeters || 65;
+        const dR = 0.000028; // ~3m radius drone airframe
+        const dLng = drone.vitals.longitude;
+        const dLat = drone.vitals.latitude;
+        features.push({
+          type: 'Feature',
+          properties: {
+            type: 'drone-3d-craft',
+            is3d: true,
+            color: isSelected ? '#ffffff' : '#00f0ff',
+            base: Math.max(0, dAlt - 0.5),
+            height: dAlt + 2.5,
+          },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[
+              [dLng, dLat + dR],
+              [dLng + dR * 0.866, dLat + dR * 0.5],
+              [dLng + dR * 0.866, dLat - dR * 0.5],
+              [dLng, dLat - dR],
+              [dLng - dR * 0.866, dLat - dR * 0.5],
+              [dLng - dR * 0.866, dLat + dR * 0.5],
+              [dLng, dLat + dR],
+            ]],
+          },
         });
       }
 
@@ -1962,6 +2004,12 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       const isCurrentLeg = idx === targetIdx;
       const isReached = wp.status === 'completed' || idx < targetIdx;
       const isDestination = idx === selectedDrone.route.length - 1 || wp.type === 'delivery';
+
+      // In 3D view mode: waypoints are marked in 3D directly in the aerial corridor ribbon!
+      // Remove separate point markers that clutter the map below the line; reserve HTML cards only for inspected/destination waypoints.
+      if (viewMode === '3d' && !isSelected && !isDestination) {
+        return;
+      }
 
       const distToWp = isCurrentLeg && selectedDrone.distanceToNextWaypointMeters !== undefined
         ? selectedDrone.distanceToNextWaypointMeters
@@ -2570,22 +2618,38 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
               });
             }
 
-            // Sleek checkpoint bead along the aerial corridor
-            const nodeR = isActive ? 0.000022 : 0.000012;
+            // 3D Transverse Checkpoint Marking Gate in the 3D Line
+            const prevCp = checkpointMission.checkpoints[Math.max(0, cpIdx - 1)];
+            const nextCp = checkpointMission.checkpoints[Math.min(checkpointMission.checkpoints.length - 1, cpIdx + 1)];
+            const dirX = (nextCp.lng - prevCp.lng) * Math.cos((cp.lat * Math.PI) / 180);
+            const dirY = nextCp.lat - prevCp.lat;
+            const dirLen = Math.hypot(dirX, dirY) || 1;
+            const tx = dirX / dirLen;
+            const ty = dirY / dirLen;
+            const nx = -ty;
+            const ny = tx;
+
+            const gateHalfWidthDeg = isActive ? 0.000065 : 0.000050;
+            const gateThicknessDeg = isActive ? 0.000020 : 0.000014;
+            const cosLat = Math.cos((cp.lat * Math.PI) / 180);
+
+            const gP1 = [cp.lng + (nx * gateHalfWidthDeg + tx * gateThicknessDeg) / cosLat, cp.lat + (ny * gateHalfWidthDeg + ty * gateThicknessDeg)];
+            const gP2 = [cp.lng + (-nx * gateHalfWidthDeg + tx * gateThicknessDeg) / cosLat, cp.lat + (-ny * gateHalfWidthDeg + ty * gateThicknessDeg)];
+            const gP3 = [cp.lng + (-nx * gateHalfWidthDeg - tx * gateThicknessDeg) / cosLat, cp.lat + (-ny * gateHalfWidthDeg - ty * gateThicknessDeg)];
+            const gP4 = [cp.lng + (nx * gateHalfWidthDeg - tx * gateThicknessDeg) / cosLat, cp.lat + (ny * gateHalfWidthDeg - ty * gateThicknessDeg)];
+
+            const gateColor = isLanding ? '#f43f5e' : isActive ? '#ffffff' : (cp.status === 'reached' ? '#10b981' : '#38bdf8');
             features.push({
               type: 'Feature',
-              properties: { is3d: true, color: isActive ? '#ffffff' : '#38bdf8', base: Math.max(0, cpAlt - 0.8), height: cpAlt + 1.2 },
+              properties: {
+                is3d: true,
+                color: gateColor,
+                base: Math.max(0, cpAlt - (isActive ? 1.0 : 0.5)),
+                height: cpAlt + (isActive ? 2.8 : 1.8),
+              },
               geometry: {
                 type: 'Polygon',
-                coordinates: [[
-                  [cp.lng, cp.lat + nodeR],
-                  [cp.lng + nodeR * 0.866, cp.lat + nodeR * 0.5],
-                  [cp.lng + nodeR * 0.866, cp.lat - nodeR * 0.5],
-                  [cp.lng, cp.lat - nodeR],
-                  [cp.lng - nodeR * 0.866, cp.lat - nodeR * 0.5],
-                  [cp.lng - nodeR * 0.866, cp.lat + nodeR * 0.5],
-                  [cp.lng, cp.lat + nodeR],
-                ]],
+                coordinates: [[gP1, gP2, gP3, gP4, gP1]],
               },
             });
           });
@@ -2601,6 +2665,11 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         const isActive = cp.status === 'active';
         const isReached = cp.status === 'reached';
         const isError = checkpointMission.status === 'error';
+
+        // In 3D view mode: waypoints are marked in 3D directly in the line; remove separate point markers
+        if (viewMode === '3d' && !isActive) {
+          return;
+        }
 
         const el = document.createElement('div');
         el.className = 'checkpoint-marker';
