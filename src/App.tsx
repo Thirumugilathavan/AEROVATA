@@ -92,6 +92,7 @@ export function App() {
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
   const [geofences, setGeofences] = useState<GeofenceZone[]>(INITIAL_GEOFENCES);
   const [officialAirspaceZones, setOfficialAirspaceZones] = useState<OfficialAirspaceZone[]>(OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
+  const [activeAirspaceSectorName, setActiveAirspaceSectorName] = useState<string>('Coimbatore Metropolitan Sector');
   const [obstacles, setObstacles] = useState<Obstacle[]>(COIMBATORE_OBSTACLES);
   const [alerts, setAlerts] = useState<AirspaceAlert[]>(INITIAL_ALERTS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
@@ -705,6 +706,12 @@ export function App() {
                     onChangeSimSpeed={setSimulationSpeed}
                     onResetSim={handleResetSimulation}
                     onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
+                    onAirspaceQueryResult={(result) => {
+                      setOfficialAirspaceZones(result.zones);
+                      if (result.sectorName) {
+                        setActiveAirspaceSectorName(result.sectorName);
+                      }
+                    }}
                     checkpointMission={checkpointMission}
                     checkpointTelemetry={checkpointTelemetry}
                     isMapPickingDestination={isMapPickingDestination}
@@ -847,6 +854,7 @@ export function App() {
           <AirspaceView
             geofences={geofences}
             officialAirspaceZones={officialAirspaceZones}
+            sectorName={activeAirspaceSectorName}
             conflicts={conflicts}
             onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
             onSwitchToLive={() => {

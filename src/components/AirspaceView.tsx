@@ -26,6 +26,7 @@ interface AirspaceViewProps {
   conflicts: AirspaceConflict[];
   onImportAirspaceData?: (importedZones: OfficialAirspaceZone[]) => void;
   onSwitchToLive: () => void;
+  sectorName?: string;
 }
 
 export const AirspaceView: React.FC<AirspaceViewProps> = ({
@@ -34,6 +35,7 @@ export const AirspaceView: React.FC<AirspaceViewProps> = ({
   conflicts,
   onImportAirspaceData,
   onSwitchToLive,
+  sectorName,
 }) => {
   const [filterClass, setFilterClass] = useState<AirspaceClassification | 'ALL'>('ALL');
   const [importJsonText, setImportJsonText] = useState('');
@@ -121,7 +123,7 @@ export const AirspaceView: React.FC<AirspaceViewProps> = ({
             </h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Authoritative Airspace Management for Coimbatore (VOCB / CJB) • DGCA Digital Sky UTM Compliance
+            Authoritative Airspace Management for {sectorName || 'Indian Metropolitan UTM Corridors'} • DGCA Digital Sky UTM Compliance
           </p>
         </div>
 
@@ -271,6 +273,19 @@ export const AirspaceView: React.FC<AirspaceViewProps> = ({
           </div>
 
           <div className="space-y-3.5">
+            {zones.length === 0 ? (
+              <div className="p-8 text-center bg-[#0d131f] border border-amber-800/60 rounded-xl my-4">
+                <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto mb-2 animate-pulse" />
+                <h3 className="text-sm font-bold text-amber-300 uppercase">Unverified Airspace Coverage</h3>
+                <p className="text-xs text-slate-400 max-w-lg mx-auto mt-2 leading-relaxed">
+                  No authoritative DGCA DigitalSky or Statutory Metro records are currently loaded for this map sector. Under DGCA Drone Rules 2021, unverified airspace must NOT be assumed to be unrestricted green zone. Autonomous operations require prior DigitalSky flight permission filing.
+                </p>
+              </div>
+            ) : filteredZones.length === 0 ? (
+              <div className="p-6 text-center text-slate-500 bg-[#0d131f] border border-slate-800 rounded-lg">
+                No airspace zones match the selected filter ({filterClass}).
+              </div>
+            ) : null}
             {filteredZones.map((zone) => {
               const isRed = zone.classification === 'RED';
               const isYellow = zone.classification === 'YELLOW';

@@ -206,14 +206,25 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
             {currentTab === 'airspace' && (
               <div className="space-y-2">
                 <div className="text-[11px] font-mono text-slate-400 mb-2 p-2 bg-[#101626] rounded border border-[#1f2c45]">
-                  Official DGCA Digital Sky Airspace rules for Coimbatore UTM Sector.
+                  Official DGCA Digital Sky Airspace rules & classification.
                 </div>
 
-                {officialAirspaceZones.map((zone) => (
-                  <div
-                    key={zone.id}
-                    className="p-2.5 rounded-lg bg-[#111728] border border-[#202e48] text-xs font-mono"
-                  >
+                {officialAirspaceZones.length === 0 ? (
+                  <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-800/60 text-xs font-mono text-amber-300">
+                    <div className="font-bold flex items-center gap-1.5 mb-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      <span>UNVERIFIED AIRSPACE</span>
+                    </div>
+                    <div className="text-[10px] text-amber-200/80">
+                      No authoritative DGCA zone records found for current map area. Unmapped airspace is not safe green zone.
+                    </div>
+                  </div>
+                ) : (
+                  officialAirspaceZones.map((zone) => (
+                    <div
+                      key={zone.id}
+                      className="p-2.5 rounded-lg bg-[#111728] border border-[#202e48] text-xs font-mono"
+                    >
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1.5">
                         <span className={`w-2 h-2 rounded-full ${
@@ -239,7 +250,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                       Authority: {zone.permissionAuthority || 'DGCA / Central Govt'}
                     </div>
                   </div>
-                ))}
+                )))}
               </div>
             )}
 
