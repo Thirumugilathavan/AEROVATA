@@ -23,25 +23,36 @@ export const StartupLoadingScreen: React.FC<StartupLoadingScreenProps> = ({ stat
     }
   }, []);
 
-  // When readiness condition is met, initiate smooth fade-out
+  // When readiness condition is met, initiate smooth fade-out and unmount
   useEffect(() => {
-    if (status.isReady && !isFadingOut) {
-      // Hold 100% ready state briefly so the user sees completion
-      const timer = setTimeout(() => {
+    if (status.isReady) {
+      const fadeTimer = setTimeout(() => {
         setIsFadingOut(true);
-      }, 400);
+      }, 350);
 
-      // Remove from DOM after fade out transition completes
       const unmountTimer = setTimeout(() => {
         setIsUnmounted(true);
-      }, 1100);
+      }, 1050);
 
       return () => {
-        clearTimeout(timer);
+        clearTimeout(fadeTimer);
         clearTimeout(unmountTimer);
       };
     }
-  }, [status.isReady, isFadingOut]);
+  }, [status.isReady]);
+
+  // Absolute failsafe timeout: If for any reason map takes more than 3.8s on startup,
+  // automatically complete loading and unveil the command center
+  useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      setIsFadingOut(true);
+      setTimeout(() => {
+        setIsUnmounted(true);
+      }, 750);
+    }, 3800);
+
+    return () => clearTimeout(safetyTimer);
+  }, []);
 
   if (isUnmounted) return null;
 

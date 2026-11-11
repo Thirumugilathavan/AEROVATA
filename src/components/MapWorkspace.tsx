@@ -792,6 +792,18 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       });
     };
 
+    // Safe immediate fallback timer: ensures user is never trapped by slow/throttled tile servers or offline
+    idleFallbackTimer = setTimeout(() => {
+      if (!hasLoadedLayers) {
+        try {
+          initMapLayers(map);
+          hasLoadedLayers = true;
+          setIsMapLoaded(true);
+        } catch {}
+      }
+      markMapReady();
+    }, 2800);
+
     map.on('style.load', () => {
       onMapReadinessChange?.({
         phase: 'style_loading',
@@ -803,8 +815,10 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
 
     map.on('load', () => {
       (window as any).__map = map;
-      initMapLayers(map);
-      hasLoadedLayers = true;
+      if (!hasLoadedLayers) {
+        initMapLayers(map);
+        hasLoadedLayers = true;
+      }
       
       try {
         map.setLight({
@@ -834,9 +848,6 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
 
       // Wait for MapLibre idle event when visible tiles & layers finish rendering
       map.once('idle', markMapReady);
-
-      // Safe fallback timer: ensures user is never trapped by slow/throttled tile servers
-      idleFallbackTimer = setTimeout(markMapReady, 4500);
     });
 
     map.on('error', (e) => {
