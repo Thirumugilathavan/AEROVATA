@@ -12,6 +12,7 @@ import type { IMissionController } from './types';
 import { MissionStateMachine } from './MissionStateMachine';
 import { validateMission } from './validation';
 import { getDistanceMeters, getBearingDegrees } from '../services/telemetryEngine';
+import { deconflictWaypointRoute } from '../services/droneAStarRouter';
 
 export class SimulationMissionController implements IMissionController {
   private stateMachine: MissionStateMachine;
@@ -27,7 +28,7 @@ export class SimulationMissionController implements IMissionController {
     this.stateMachine = new MissionStateMachine('idle');
   }
 
-  public loadMission(mission: Mission): { success: boolean; error?: string } {
+  public loadMission(mission: Mission, options?: { obstacles?: any[]; airspaceZones?: any[] }): { success: boolean; error?: string } {
     // Halt any running simulation loop before loading new mission
     this.stopInternalTicker();
 
@@ -43,6 +44,44 @@ export class SimulationMissionController implements IMissionController {
       this.currentTelemetry = this.createDefaultTelemetry(clonedMission, 'error');
       this.notifyListeners();
       return { success: false, error: validation.error };
+    }
+
+    // Deconflict checkpoints around 3D buildings and obstacles before execution
+    if (clonedMission.checkpoints.length >= 2) {
+      const deconfliction = deconflictWaypointRoute(
+        clonedMission.checkpoints.map((cp) => ({
+          id: cp.id,
+          name: cp.name,
+          lat: cp.lat,
+          lng: cp.lng,
+          altitudeMeters: cp.altitudeMeters,
+          type: (cp.action === 'takeoff' ? 'base' : cp.action === 'drop_payload' ? 'delivery' : 'transit') as any,
+          status: 'upcoming' as const,
+          etaMinutes: 0,
+        })),
+        clonedMission.checkpoints[0]?.altitudeMeters || 60,
+        options
+      );
+
+      if (deconfliction.hasRerouted) {
+        clonedMission.checkpoints = deconfliction.route.map((wp, idx) => {
+          const orig = clonedMission.checkpoints.find((c) => c.id === wp.id);
+          return {
+            id: wp.id,
+            sequence: idx + 1,
+            name: wp.name,
+            lat: wp.lat,
+            lng: wp.lng,
+            altitudeMeters: wp.altitudeMeters,
+            targetSpeedKmh: orig?.targetSpeedKmh || 45,
+            arrivalRadiusMeters: orig?.arrivalRadiusMeters || 8,
+            dwellTimeSeconds: orig?.dwellTimeSeconds || 0,
+            action: (idx === 0 ? 'takeoff' : idx === deconfliction.route.length - 1 ? 'drop_payload' : 'transit') as any,
+            status: (idx === 0 ? 'reached' : idx === 1 ? 'active' : 'pending') as any,
+            notes: orig?.notes || `Deconflicted 3D safe checkpoint ${idx + 1}`,
+          };
+        });
+      }
     }
 
     // Calculate total route distance

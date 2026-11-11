@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import { Drone, DroneStatus, Waypoint, RouteCandidate } from '../types/fleet';
+import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { getBearingDegrees } from '../services/telemetryEngine';
 import { 
   COIMBATORE_LOCATIONS, 
@@ -111,12 +112,18 @@ export const AddDroneModal: React.FC<AddDroneModalProps> = ({
   const computeRoute = () => {
     setIsCalculating(true);
     try {
+      const dynamicObs = typeof window !== 'undefined' && (window as any).__getDynamicBuildingObstacles
+        ? (window as any).__getDynamicBuildingObstacles()
+        : [];
+      const combinedObs = dynamicObs.length > 0 ? [...COIMBATORE_DETAILED_OBSTACLES, ...dynamicObs] : undefined;
+
       const multi = calculateDroneMultiRoute(startLoc.coordinates, destCoords, {
         startName: startLoc.name,
         destName,
         cruiseAltMeters: cruiseAltitude,
         safetyMarginMeters: 35,
         checkpointSpacingMeters: checkpointSpacing,
+        obstacles: combinedObs,
       });
       setMultiRouteResult(multi);
 

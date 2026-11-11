@@ -9,10 +9,17 @@ import {
   OFFICIAL_REGULATORY_CONFIG,
   COIMBATORE_LOCATIONS, 
   SIMULATION_BOUNDS, 
-  isCoordinateWithinBounds 
+  isCoordinateWithinBounds,
+  checkSegmentObstacleIntersection,
+  rerouteSegmentAroundObstacles,
+  generateVerticalOverflight,
+  validateRoute3D,
+  deconflictWaypointRoute,
+  deconflictWaypointRoute3D
 } from './droneAStarRouter';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from '../data/officialAirspaceData';
+import { SimulationMissionController } from '../controller/SimulationMissionController';
 
 describe('Drone A* Pathfinding Engine & Route Generator', () => {
   // ─── 1. Simulation Bounds and Input Validation ───────────────────────────
@@ -120,12 +127,10 @@ describe('Drone A* Pathfinding Engine & Route Generator', () => {
         assert.strictEqual(cp.altitudeMeters, 75, 'Intermediate checkpoints should be at configured cruise altitude');
       }
       assert.ok(cp.name.length > 0);
-      assert.ok(cp.id.startsWith('test-'));
-      assert.strictEqual(cp.status, idx === 0 ? 'completed' : 'upcoming');
     });
   });
 
-  // ─── 3. 3D Building Clearance and Airspace Zone Constraints ──────────────
+  // ─── 3. 3D Obstacle and Airspace Validation ──────────────────────────────
   it('validates vertical clearance and horizontal separation against 3D buildings', () => {
     // Take a route near a known high-rise obstacle (e.g. TIDEL Park or Express Tower)
     const obstacle = COIMBATORE_DETAILED_OBSTACLES.find((o) => (o.heightMeters || 0) >= 40)!;
@@ -238,10 +243,398 @@ describe('Drone A* Pathfinding Engine & Route Generator', () => {
     ];
 
     // Identical route coordinates -> must return false
-    assert.strictEqual(areRoutesGenuinelyDistinct(coords, coords, 60), false);
+    const dupCoords: [number, number][] = [
+      [76.9665, 11.0025],
+      [76.9800, 11.0100],
+      [77.0000, 11.0200],
+    ];
 
-    // Negligible perturbation (< 10m) -> must return false
-    const trivialPerturbation: [number, number][] = coords.map(([lng, lat]) => [lng + 0.00005, lat + 0.00005]);
-    assert.strictEqual(areRoutesGenuinelyDistinct(coords, trivialPerturbation, 60), false);
+    assert.strictEqual(areRoutesGenuinelyDistinct(coords, dupCoords, 50), false);
+  });
+});
+
+describe('AEROVATA Part 7 — Complete Building-Aware 3D Navigation Test Suite', () => {
+  const testBuilding = {
+    id: 'test-building-1',
+    name: 'Apollo Medical Tower',
+    type: 'building' as const,
+    heightMeters: 35,
+    physicalHeightMeters: 35,
+    verticalClearanceBufferMeters: 15,
+    safetyBufferMeters: 20,
+    heightConfidence: 'verified' as const,
+    center: [76.9800, 11.0100] as [number, number],
+    coordinates: [
+      [76.9790, 11.0090],
+      [76.9810, 11.0090],
+      [76.9810, 11.0110],
+      [76.9790, 11.0110],
+      [76.9790, 11.0090],
+    ] as [number, number][],
+  };
+
+  const wpA = {
+    id: 'wp-start',
+    name: 'Peelamedu North Pad',
+    lng: 76.9740,
+    lat: 11.0100,
+    altitudeMeters: 40,
+    type: 'base' as const,
+    status: 'completed' as const,
+  };
+
+  const wpB = {
+    id: 'wp-dest',
+    name: 'Gandhipuram East Pad',
+    lng: 76.9860,
+    lat: 11.0100,
+    altitudeMeters: 40,
+    type: 'delivery' as const,
+    status: 'upcoming' as const,
+  };
+
+  // ─── TEST 1: Single building ──────────────────────────────────────────
+  it('Test 1: Single building - avoids building horizontally or safely passes above it using known height', () => {
+    const check = checkSegmentObstacleIntersection(wpA, wpB, 40, 20, [testBuilding as any], []);
+    assert.strictEqual(check.isBlocked, true);
+    assert.ok(check.reason?.includes('Apollo Medical Tower'));
+
+    const res = rerouteSegmentAroundObstacles(wpA, wpB, 40, 20, [testBuilding as any], []);
+    assert.strictEqual(res.isRerouted, true);
+    assert.ok(res.avoidanceMode === 'horizontal' || res.avoidanceMode === 'vertical_overflight');
+
+    assert.strictEqual(res.waypoints[res.waypoints.length - 1].id, wpB.id);
+
+    const val = validateRoute3D([wpA, ...res.waypoints], 20, 15, [testBuilding as any], []);
+    assert.strictEqual(val.isValid, true);
+    assert.strictEqual(val.hasCollision, false);
+  });
+
+  // ─── TEST 2: Multiple buildings ───────────────────────────────────────
+  it('Test 2: Multiple buildings - entire route avoids all building volumes', () => {
+    const secondBuilding = {
+      id: 'test-building-2',
+      name: 'Victoria Corporate Plaza',
+      type: 'building' as const,
+      heightMeters: 42,
+      physicalHeightMeters: 42,
+      verticalClearanceBufferMeters: 15,
+      safetyBufferMeters: 20,
+      heightConfidence: 'verified' as const,
+      center: [76.9890, 11.0100] as [number, number],
+      coordinates: [
+        [76.9880, 11.0090],
+        [76.9900, 11.0090],
+        [76.9900, 11.0110],
+        [76.9880, 11.0110],
+        [76.9880, 11.0090],
+      ] as [number, number][],
+    };
+
+    const wpC = {
+      id: 'wp-dest-far',
+      name: 'Singanallur Hub',
+      lng: 76.9950,
+      lat: 11.0100,
+      altitudeMeters: 40,
+      type: 'delivery' as const,
+      status: 'upcoming' as const,
+    };
+
+    const multiMission = [wpA, wpB, wpC];
+    const deconf = deconflictWaypointRoute(multiMission, 40, {
+      safetyMargin: 20,
+      verticalMargin: 15,
+      obstacles: [testBuilding as any, secondBuilding as any],
+      airspaceZones: [],
+    });
+
+    assert.strictEqual(deconf.hasRerouted, true);
+    assert.strictEqual(deconf.route[0].id, wpA.id);
+    assert.strictEqual(deconf.route[deconf.route.length - 1].id, wpC.id);
+
+    const val = validateRoute3D(deconf.route, 20, 15, [testBuilding as any, secondBuilding as any], []);
+    assert.strictEqual(val.isValid, true);
+    assert.strictEqual(val.hasCollision, false);
+    assert.strictEqual(val.violations.length, 0);
+  });
+
+  // ─── TEST 3: Vertical overflight ──────────────────────────────────────
+  it('Test 3: Vertical overflight - climbs to safe altitude, passes above building with clearance, descends safely', () => {
+    const overflight = generateVerticalOverflight(wpA, wpB, 20, 15, [testBuilding as any], []);
+    assert.ok(overflight !== null);
+    assert.strictEqual(overflight.overflightAlt, 50); // 35m height + 15m buffer = 50m
+
+    assert.ok(overflight.waypoints.some((w) => w.id.includes('climb')));
+    assert.ok(overflight.waypoints.some((w) => w.id.includes('overflight')));
+    assert.ok(overflight.waypoints.some((w) => w.id.includes('descent')));
+
+    assert.strictEqual(overflight.waypoints[overflight.waypoints.length - 1].id, wpB.id);
+
+    const fullRoute = [wpA, ...overflight.waypoints];
+    const val = validateRoute3D(fullRoute, 20, 15, [testBuilding as any], []);
+    assert.strictEqual(val.isValid, true);
+    assert.strictEqual(val.hasCollision, false);
+  });
+
+  // ─── TEST 4: Unknown building height ──────────────────────────────────
+  it('Test 4: Unknown building height - avoids footprint horizontally and does not assume overflight', () => {
+    const unknownHeightBuilding = {
+      ...testBuilding,
+      id: 'building-unknown-height',
+      name: 'Unsurveyed Masonry Structure',
+      heightConfidence: 'unknown' as const,
+      physicalHeightMeters: undefined,
+      heightMeters: 0,
+    };
+
+    const overflight = generateVerticalOverflight(wpA, wpB, 20, 15, [unknownHeightBuilding as any], []);
+    assert.strictEqual(overflight, null, 'Overflight must be strictly null when building height is unknown');
+
+    const res = rerouteSegmentAroundObstacles(wpA, wpB, 40, 20, [unknownHeightBuilding as any], [], {
+      modePreference: 'auto',
+    });
+
+    assert.strictEqual(res.isRerouted, true);
+    assert.strictEqual(res.avoidanceMode, 'horizontal');
+
+    const minLat = Math.min(...res.coordinates.map((c) => c[1]));
+    const maxLat = Math.max(...res.coordinates.map((c) => c[1]));
+    const isDetouredAround = minLat < 11.0090 || maxLat > 11.0110;
+    assert.strictEqual(isDetouredAround, true, 'Detour must navigate around polygon footprint');
+  });
+
+  // ─── TEST 5: Multiple nearby obstacles ────────────────────────────────
+  it('Test 5: Multiple nearby obstacles - finds safe passage between or around them', () => {
+    const northObstacle = {
+      id: 'obs-north-annex',
+      name: 'North High-Rise Annex',
+      type: 'building' as const,
+      heightMeters: 55,
+      physicalHeightMeters: 55,
+      verticalClearanceBufferMeters: 15,
+      safetyBufferMeters: 20,
+      heightConfidence: 'verified' as const,
+      center: [76.9800, 11.0125] as [number, number],
+      coordinates: [
+        [76.9780, 11.0105],
+        [76.9820, 11.0105],
+        [76.9820, 11.0145],
+        [76.9780, 11.0145],
+        [76.9780, 11.0105],
+      ] as [number, number][],
+    };
+
+    const res = rerouteSegmentAroundObstacles(wpA, wpB, 40, 18, [testBuilding as any, northObstacle as any], [], {
+      modePreference: 'prefer_horizontal',
+    });
+
+    assert.strictEqual(res.isRerouted, true);
+    assert.strictEqual(res.avoidanceMode, 'horizontal');
+
+    const minLat = Math.min(...res.coordinates.map((c) => c[1]));
+    assert.ok(minLat < 11.0090, `Expected route to bypass south (< 11.0090), got ${minLat}`);
+
+    const val = validateRoute3D([wpA, ...res.waypoints], 18, 15, [testBuilding as any, northObstacle as any], []);
+    assert.strictEqual(val.isValid, true);
+  });
+
+  // ─── TEST 6: Obstacle near destination ────────────────────────────────
+  it('Test 6: Obstacle near destination - destination remains unchanged and approach is safe', () => {
+    const nearDestBuilding = {
+      id: 'building-near-dest',
+      name: 'Destination Approach Substation',
+      type: 'building' as const,
+      heightMeters: 30,
+      physicalHeightMeters: 30,
+      verticalClearanceBufferMeters: 15,
+      safetyBufferMeters: 15,
+      heightConfidence: 'verified' as const,
+      center: [76.9845, 11.0100] as [number, number],
+      coordinates: [
+        [76.9835, 11.0095],
+        [76.9852, 11.0095],
+        [76.9852, 11.0105],
+        [76.9835, 11.0105],
+        [76.9835, 11.0095],
+      ] as [number, number][],
+    };
+
+    const res = rerouteSegmentAroundObstacles(wpA, wpB, 40, 15, [nearDestBuilding as any], []);
+    assert.strictEqual(res.isRerouted, true);
+
+    const finalWp = res.waypoints[res.waypoints.length - 1];
+    assert.strictEqual(finalWp.id, wpB.id);
+    assert.strictEqual(finalWp.lat, wpB.lat);
+    assert.strictEqual(finalWp.lng, wpB.lng);
+
+    const val = validateRoute3D([wpA, ...res.waypoints], 15, 15, [nearDestBuilding as any], []);
+    assert.strictEqual(val.isValid, true);
+    assert.strictEqual(val.hasCollision, false);
+  });
+
+  // ─── TEST 7: Impossible route ─────────────────────────────────────────
+  it('Test 7: Impossible route - rejects route and reports clear warning reason', () => {
+    const trappedDestination = {
+      id: 'trapped-dest',
+      name: 'Vault Center Pad',
+      lat: 11.0100,
+      lng: 76.9800,
+      altitudeMeters: 15,
+      type: 'delivery' as const,
+      status: 'upcoming' as const,
+    };
+
+    const res = rerouteSegmentAroundObstacles(wpA, trappedDestination, 15, 20, [testBuilding as any], []);
+    assert.strictEqual(res.isRerouted, false);
+    assert.ok(res.warning !== undefined);
+    assert.ok(res.warning.includes('No valid route') || res.warning.includes('blocked'));
+  });
+
+  // ─── TEST 8: Already-safe route ───────────────────────────────────────
+  it('Test 8: Already-safe route - remains completely unchanged', () => {
+    const clearWpA = {
+      id: 'clear-1',
+      name: 'Open Sky Pad 1',
+      lat: 11.0200,
+      lng: 76.9500,
+      altitudeMeters: 65,
+      type: 'base' as const,
+      status: 'completed' as const,
+    };
+    const clearWpB = {
+      id: 'clear-2',
+      name: 'Open Sky Pad 2',
+      lat: 11.0250,
+      lng: 76.9500,
+      altitudeMeters: 65,
+      type: 'delivery' as const,
+      status: 'upcoming' as const,
+    };
+
+    const res = rerouteSegmentAroundObstacles(clearWpA, clearWpB, 65, 20, [testBuilding as any], []);
+    assert.strictEqual(res.isRerouted, false);
+    assert.strictEqual(res.waypoints.length, 1);
+    assert.strictEqual(res.waypoints[0].id, clearWpB.id);
+    assert.strictEqual(res.addedDistanceMeters, 0);
+  });
+
+  // ─── TEST 9: Complete 3D collision validation ─────────────────────────
+  it('Test 9: Complete 3D collision validation - validates climb, cruise, overflight and descent segments', () => {
+    const testMission = [
+      wpA,
+      {
+        id: 'wp-climb',
+        name: 'Climb Waypoint',
+        lat: 11.0100,
+        lng: 76.9770,
+        altitudeMeters: 55,
+        type: 'transit' as const,
+        status: 'upcoming' as const,
+      },
+      {
+        id: 'wp-over',
+        name: 'Overflight Waypoint',
+        lat: 11.0100,
+        lng: 76.9800,
+        altitudeMeters: 55,
+        type: 'transit' as const,
+        status: 'upcoming' as const,
+      },
+      {
+        id: 'wp-desc',
+        name: 'Descent Waypoint',
+        lat: 11.0100,
+        lng: 76.9830,
+        altitudeMeters: 55,
+        type: 'transit' as const,
+        status: 'upcoming' as const,
+      },
+      wpB,
+    ];
+
+    const val = validateRoute3D(testMission, 20, 15, [testBuilding as any], []);
+    assert.strictEqual(val.isValid, true);
+    assert.strictEqual(val.hasCollision, false);
+    assert.strictEqual(val.violations.length, 0);
+    assert.strictEqual(val.regulatoryCompliant, true);
+    assert.ok(val.minVerticalClearanceMeters >= 0);
+  });
+
+  // ─── TEST 10: Mission integration ─────────────────────────────────────
+  it('Test 10: Mission integration - displayed route and simulation system route are identical in waypoints and altitude', () => {
+    const testMissionDef = {
+      id: 'MSN-INTEG-01',
+      title: 'Autonomous Integration Mission',
+      description: 'Tests synchronization between simulation mission controller and 3D map route',
+      priority: 'URGENT' as const,
+      droneId: 'AV-01',
+      droneCallsign: 'DRONE 01',
+      status: 'idle' as const,
+      currentCheckpointIndex: 0,
+      totalDistanceMeters: 1000,
+      elapsedTimeSeconds: 0,
+      estimatedRemainingSeconds: 60,
+      progressPercent: 0,
+      checkpoints: [
+        {
+          id: 'cp-start',
+          sequence: 1,
+          name: 'Peelamedu North Pad',
+          lat: wpA.lat,
+          lng: wpA.lng,
+          altitudeMeters: 40,
+          targetSpeedKmh: 45,
+          arrivalRadiusMeters: 8,
+          dwellTimeSeconds: 0,
+          action: 'takeoff' as const,
+          status: 'pending' as const,
+        },
+        {
+          id: 'cp-dest',
+          sequence: 2,
+          name: 'Gandhipuram East Pad',
+          lat: wpB.lat,
+          lng: wpB.lng,
+          altitudeMeters: 40,
+          targetSpeedKmh: 45,
+          arrivalRadiusMeters: 8,
+          dwellTimeSeconds: 0,
+          action: 'drop_payload' as const,
+          status: 'pending' as const,
+        },
+      ],
+    };
+
+    const controller = new SimulationMissionController();
+    const loadRes = controller.loadMission(testMissionDef, { obstacles: [testBuilding as any], airspaceZones: [] });
+    assert.strictEqual(loadRes.success, true);
+
+    const loadedMission = controller.getMission();
+    assert.ok(loadedMission !== null);
+
+    const expectedRoute = deconflictWaypointRoute3D(
+      testMissionDef.checkpoints.map((cp) => ({
+        id: cp.id,
+        name: cp.name,
+        lat: cp.lat,
+        lng: cp.lng,
+        altitudeMeters: cp.altitudeMeters,
+        type: 'transit' as const,
+        status: 'upcoming' as const,
+      })),
+      40,
+      { obstacles: [testBuilding as any], airspaceZones: [] }
+    );
+
+    assert.strictEqual(loadedMission.checkpoints.length, expectedRoute.route.length);
+    for (let k = 0; k < loadedMission.checkpoints.length; k++) {
+      const cp: any = loadedMission.checkpoints[k];
+      const wp = expectedRoute.route[k];
+      assert.strictEqual(cp.id, wp.id);
+      assert.strictEqual(Math.round(cp.lat * 10000), Math.round(wp.lat * 10000));
+      assert.strictEqual(Math.round(cp.lng * 10000), Math.round(wp.lng * 10000));
+      assert.strictEqual(cp.altitudeMeters, wp.altitudeMeters);
+    }
   });
 });

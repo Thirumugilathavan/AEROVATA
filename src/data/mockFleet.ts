@@ -97,11 +97,19 @@ export const INITIAL_DRONES: Drone[] = [
     ],
     completedRouteWaypoints: [],
     blockedRouteWaypoints: [],
-    route: [
+    originalRoute: [
       { id: 'w1-1', name: 'Peelamedu Transit Depot (Origin)', lat: 11.0260, lng: 77.0120, altitudeMeters: 65, type: 'base', status: 'completed', etaMinutes: 0 },
       { id: 'w1-2', name: 'Nava India Sky Corridor', lat: 11.0180, lng: 76.9940, altitudeMeters: 65, type: 'transit', status: 'active', etaMinutes: 2 },
       { id: 'w1-3', name: 'Lakshmi Mills Overfly Corridor', lat: 11.0105, lng: 76.9830, altitudeMeters: 65, type: 'transit', status: 'upcoming', etaMinutes: 4 },
       { id: 'w1-4', name: 'Collectorate Junction Transit', lat: 11.0060, lng: 76.9740, altitudeMeters: 55, type: 'transit', status: 'upcoming', etaMinutes: 6 },
+      { id: 'w1-5', name: 'CMCH Trauma Center Pad 1 (Destination)', lat: 11.0025, lng: 76.9665, altitudeMeters: 45, type: 'delivery', status: 'upcoming', etaMinutes: 8 },
+    ],
+    route: [
+      { id: 'w1-1', name: 'Peelamedu Transit Depot (Origin)', lat: 11.0260, lng: 77.0120, altitudeMeters: 65, type: 'base', status: 'completed', etaMinutes: 0 },
+      { id: 'w1-2', name: 'Nava India Sky Corridor', lat: 11.0180, lng: 76.9940, altitudeMeters: 65, type: 'transit', status: 'active', etaMinutes: 2 },
+      { id: 'w1-3', name: 'Lakshmi Mills Overfly Corridor', lat: 11.0105, lng: 76.9830, altitudeMeters: 65, type: 'transit', status: 'upcoming', etaMinutes: 4 },
+      { id: 'w1-4', name: 'Collectorate Junction Transit', lat: 11.0125, lng: 76.9740, altitudeMeters: 60, type: 'transit', status: 'upcoming', etaMinutes: 6 },
+      { id: 'w1-4b', name: 'State Bank Road North Transit', lat: 11.0125, lng: 76.9690, altitudeMeters: 55, type: 'transit', status: 'upcoming', etaMinutes: 7 },
       { id: 'w1-5', name: 'CMCH Trauma Center Pad 1 (Destination)', lat: 11.0025, lng: 76.9665, altitudeMeters: 45, type: 'delivery', status: 'upcoming', etaMinutes: 8 },
     ],
     vitals: {
@@ -192,12 +200,19 @@ export const INITIAL_DRONES: Drone[] = [
     ],
     completedRouteWaypoints: [],
     blockedRouteWaypoints: [],
-    route: [
+    originalRoute: [
       { id: 'w2-1', name: 'Gandhipuram Diagnostic Hub (Origin)', lat: 11.0180, lng: 76.9680, altitudeMeters: 60, type: 'base', status: 'completed', etaMinutes: 0 },
       { id: 'w2-2', name: 'Ramakrishna Mill Transit Corridor', lat: 11.0210, lng: 76.9850, altitudeMeters: 62, type: 'transit', status: 'active', etaMinutes: 2 },
       { id: 'w2-3', name: 'PSG Tech Innovation Skyway', lat: 11.0245, lng: 77.0040, altitudeMeters: 65, type: 'transit', status: 'upcoming', etaMinutes: 4 },
       { id: 'w2-4', name: 'Civil Aerodrome Buffer Route', lat: 11.0265, lng: 77.0180, altitudeMeters: 60, type: 'transit', status: 'upcoming', etaMinutes: 6 },
       { id: 'w2-5', name: 'TIDEL Park IT SEZ Med-Dock (Destination)', lat: 11.0275, lng: 77.0268, altitudeMeters: 45, type: 'delivery', status: 'upcoming', etaMinutes: 8 },
+    ],
+    route: [
+      { id: 'w2-1', name: 'Gandhipuram Diagnostic Hub (Origin)', lat: 11.0180, lng: 76.9680, altitudeMeters: 60, type: 'base', status: 'completed', etaMinutes: 0 },
+      { id: 'w2-2', name: 'Ramakrishna Mill Transit Corridor', lat: 11.0210, lng: 76.9850, altitudeMeters: 62, type: 'transit', status: 'active', etaMinutes: 2 },
+      { id: 'w2-3', name: 'PSG Tech Innovation Skyway', lat: 11.0245, lng: 77.0040, altitudeMeters: 65, type: 'transit', status: 'upcoming', etaMinutes: 4 },
+      { id: 'w2-4', name: 'Civil Aerodrome Buffer Route', lat: 11.0265, lng: 77.0180, altitudeMeters: 60, type: 'transit', status: 'upcoming', etaMinutes: 6 },
+      { id: 'w2-5', name: 'TIDEL Park IT SEZ Med-Dock (Destination)', lat: 11.0250, lng: 77.0250, altitudeMeters: 45, type: 'delivery', status: 'upcoming', etaMinutes: 8 },
     ],
     vitals: {
       batteryPercentage: 88,
