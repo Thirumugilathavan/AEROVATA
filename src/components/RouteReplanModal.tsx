@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   X, 
   RefreshCw, 
@@ -11,6 +11,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Drone, Waypoint, RouteComparisonParameter } from '../types/fleet';
+import { LoadingSpinner } from './loading/LoadingSpinner';
 
 interface RouteReplanModalProps {
   drone: Drone;
@@ -35,6 +36,18 @@ export const RouteReplanModal: React.FC<RouteReplanModalProps> = ({
   onAccept,
   onReject,
 }) => {
+  const [isAccepting, setIsAccepting] = useState(false);
+
+  const handleConfirm = () => {
+    if (isAccepting) return;
+    setIsAccepting(true);
+    try {
+      onAccept();
+    } catch {
+      setIsAccepting(false);
+    }
+  };
+
   const defaultTable: RouteComparisonParameter[] = comparisonTable || [
     {
       parameter: 'Total Flight Distance',
@@ -199,16 +212,27 @@ export const RouteReplanModal: React.FC<RouteReplanModalProps> = ({
           <div className="flex items-center gap-2.5">
             <button
               onClick={onReject}
-              className="px-4 py-2 rounded-lg text-xs font-mono font-bold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 transition-colors"
+              disabled={isAccepting}
+              className="px-4 py-2 rounded-lg text-xs font-mono font-bold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700 transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
             <button
-              onClick={onAccept}
-              className="px-5 py-2 rounded-lg text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-extrabold shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all flex items-center gap-2"
+              onClick={handleConfirm}
+              disabled={isAccepting}
+              className="px-5 py-2 rounded-lg text-xs font-mono font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all flex items-center gap-2 disabled:opacity-75 disabled:cursor-wait"
             >
-              <Check className="w-4 h-4" />
-              CONFIRM &amp; DISPATCH A* CORRIDOR
+              {isAccepting ? (
+                <>
+                  <LoadingSpinner size="xs" color="text-slate-950" />
+                  <span>DISPATCHING FLIGHT PATH...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>CONFIRM &amp; DISPATCH A* CORRIDOR</span>
+                </>
+              )}
             </button>
           </div>
         </div>

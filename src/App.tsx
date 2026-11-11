@@ -24,6 +24,9 @@ import { Px4SetupModal } from './components/Px4SetupModal';
 import { BottomMissionBar } from './components/BottomMissionBar';
 import { AltitudeProfileStrip } from './components/AltitudeProfileStrip';
 import { AddDroneModal } from './components/AddDroneModal';
+import { LoadingProvider } from './context/LoadingContext';
+import { StartupLoadingScreen } from './components/loading/StartupLoadingScreen';
+import { MapReadinessStatus } from './types/loading';
 import { apiService } from './services/api/index';
 import type { Mission, MissionTelemetry } from './types/mission';
 import { Navigation, X } from 'lucide-react';
@@ -75,6 +78,25 @@ export function App() {
   const [bottomTabMode, setBottomTabMode] = useState<'detail' | 'checkpoint' | 'logs'>('detail');
   const [isApiContractOpen, setIsApiContractOpen] = useState<boolean>(false);
   const [isPx4SetupOpen, setIsPx4SetupOpen] = useState<boolean>(false);
+
+  // Map Readiness & Startup Loading Screen state
+  const [mapReadiness, setMapReadiness] = useState<MapReadinessStatus>({
+    phase: 'initializing',
+    progress: 15,
+    message: 'Initializing flight environment...',
+    isReady: false,
+  });
+  const [mapInitKey, setMapInitKey] = useState<number>(0);
+
+  const handleRetryMapInit = () => {
+    setMapReadiness({
+      phase: 'initializing',
+      progress: 15,
+      message: 'Re-initializing flight environment...',
+      isReady: false,
+    });
+    setMapInitKey((prev) => prev + 1);
+  };
 
   // Map-First 3D Command Center Layout & Drawer States
   const [isLeftFleetOpen, setIsLeftFleetOpen] = useState<boolean>(false);
@@ -632,8 +654,12 @@ export function App() {
   };
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#080b12] text-slate-100 overflow-hidden select-none font-sans">
-      {/* Top Navigation Bar (NO AUDIO BUTTON) */}
+    <LoadingProvider>
+      <div className="w-screen h-screen flex flex-col bg-[#080b12] text-slate-100 overflow-hidden select-none font-sans relative">
+        {/* Full-Screen Startup Experience with Animated Aerovata Logo & Lifecycle Tracking */}
+        <StartupLoadingScreen status={mapReadiness} onRetry={handleRetryMapInit} />
+
+        {/* Top Navigation Bar (NO AUDIO BUTTON) */}
       <Header
         activeTab={activeTab}
         setActiveTab={(tab) => {
@@ -690,6 +716,8 @@ export function App() {
                   />
                 ) : (
                   <MapWorkspace
+                    key={mapInitKey}
+                    onMapReadinessChange={setMapReadiness}
                     drones={drones}
                     selectedDroneId={selectedDroneId}
                     onSelectDrone={handleSelectDrone}
@@ -973,7 +1001,8 @@ export function App() {
         }}
         isMapPickingActive={isMapPickingDestination}
       />
-    </div>
+      </div>
+    </LoadingProvider>
   );
 }
 
