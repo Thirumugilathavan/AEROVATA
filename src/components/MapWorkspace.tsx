@@ -603,7 +603,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           coordinates: coords,
           heightConfidence: f.properties?.render_height ? 'verified' : 'estimated',
           heightSource: 'OpenFreeMap 3D Vector Building Tiles',
-          color: '#0284c7',
+          color: '#71717a',
           safetyBufferMeters: 20.0,
           description: `Extruded urban building structure from vector tiles (${Math.round(height)}m AGL)`
         });
@@ -1254,12 +1254,12 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
               'interpolate',
               ['linear'],
               ['min', 120, ['coalesce', ['get', 'render_height'], ['get', 'height'], 6.4]],
-              0, '#1e293b',
-              6, '#334155',
-              15, '#475569',
-              35, '#64748b',
-              60, '#94a3b8',
-              100, '#cbd5e1'
+              0, '#27272a',
+              6, '#3f3f46',
+              15, '#52525b',
+              35, '#71717a',
+              60, '#a1a1aa',
+              100, '#d4d4d8'
             ],
             // Use actual mapped heights from OpenFreeMap vector tiles (render_height in meters).
             // Checked against render_height, height, and levels (3.2m/floor), clamped to realistic urban limits [3.2m - 150m].
@@ -1377,11 +1377,11 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             ['interpolate',
               ['linear'],
               ['coalesce', ['get', 'physical_height'], ['get', 'height'], 24.0],
-              6, '#334155',
-              15, '#475569',
-              35, '#64748b',
-              60, '#94a3b8',
-              100, '#cbd5e1'
+              6, '#3f3f46',
+              15, '#52525b',
+              35, '#71717a',
+              60, '#a1a1aa',
+              100, '#d4d4d8'
             ]
           ],
           'fill-extrusion-height': [
@@ -1400,7 +1400,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         type: 'line',
         source: 'coimbatore-obstacles',
         paint: {
-          'line-color': '#475569',
+          'line-color': '#52525b',
           'line-width': 1.5,
         },
       });
