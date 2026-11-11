@@ -1359,12 +1359,28 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         id: 'flight-routes-3d-corridor',
         type: 'fill-extrusion',
         source: 'flight-routes',
-        filter: ['==', ['get', 'type'], 'corridor-3d'],
+        filter: ['==', ['get', 'is3d'], true],
         paint: {
           'fill-extrusion-color': ['coalesce', ['get', 'color'], '#00f0ff'],
           'fill-extrusion-height': ['coalesce', ['get', 'height'], 67.0],
           'fill-extrusion-base': ['coalesce', ['get', 'base'], 64.0],
-          'fill-extrusion-opacity': ['coalesce', ['get', 'corridorOpacity'], 0.75],
+          'fill-extrusion-opacity': 0.92,
+        },
+      });
+    }
+
+    // Ensure 3D aerial flight corridor layer exists even if source pre-existed
+    if (!map.getLayer('flight-routes-3d-corridor') && map.getSource('flight-routes')) {
+      map.addLayer({
+        id: 'flight-routes-3d-corridor',
+        type: 'fill-extrusion',
+        source: 'flight-routes',
+        filter: ['==', ['get', 'is3d'], true],
+        paint: {
+          'fill-extrusion-color': ['coalesce', ['get', 'color'], '#00f0ff'],
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], 67.0],
+          'fill-extrusion-base': ['coalesce', ['get', 'base'], 64.0],
+          'fill-extrusion-opacity': 0.92,
         },
       });
     }
@@ -1408,11 +1424,39 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         id: 'checkpoint-corridor-line',
         type: 'line',
         source: 'checkpoint-corridor',
+        filter: ['!=', ['get', 'is3d'], true],
         paint: {
           'line-color': '#00f0ff',
           'line-width': 2.5,
           'line-dasharray': [3, 2],
           'line-opacity': 0.95,
+        },
+      });
+      map.addLayer({
+        id: 'checkpoint-corridor-3d',
+        type: 'fill-extrusion',
+        source: 'checkpoint-corridor',
+        filter: ['==', ['get', 'is3d'], true],
+        paint: {
+          'fill-extrusion-color': '#00f0ff',
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], 67.0],
+          'fill-extrusion-base': ['coalesce', ['get', 'base'], 64.0],
+          'fill-extrusion-opacity': 0.92,
+        },
+      });
+    }
+
+    if (!map.getLayer('checkpoint-corridor-3d') && map.getSource('checkpoint-corridor')) {
+      map.addLayer({
+        id: 'checkpoint-corridor-3d',
+        type: 'fill-extrusion',
+        source: 'checkpoint-corridor',
+        filter: ['==', ['get', 'is3d'], true],
+        paint: {
+          'fill-extrusion-color': '#00f0ff',
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], 67.0],
+          'fill-extrusion-base': ['coalesce', ['get', 'base'], 64.0],
+          'fill-extrusion-opacity': 0.92,
         },
       });
     }
@@ -1471,8 +1515,8 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       const lineWidth = isSelected ? 5.5 : 2.0;
       const lineOpacity = isSelected ? 1.0 : 0.35;
 
-      // 1. Original route (faded if rerouted)
-      if (drone.originalRoute && drone.originalRoute.length >= 2) {
+      // 1. Original route (faded if rerouted, 2D view only)
+      if (viewMode !== '3d' && drone.originalRoute && drone.originalRoute.length >= 2) {
         features.push({
           type: 'Feature',
           properties: { color: '#94a3b8', type: 'original', lineWidth: 1.8, lineOpacity: 0.35 },
@@ -1483,15 +1527,15 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         });
       }
 
-      // 2. Active route
-      if (drone.route.length >= 2) {
+      // 2. Active 2D route (Only in 2D mode! In 3D view mode, no ground line is rendered under/through buildings)
+      if (viewMode !== '3d' && drone.route.length >= 2) {
         features.push({
           type: 'Feature',
           properties: {
             color,
             type: 'planned',
-            lineWidth: isSelected ? (viewMode === '3d' ? 3.5 : 5.5) : 2.0,
-            lineOpacity: viewMode === '3d' ? (isSelected ? 0.50 : 0.20) : lineOpacity,
+            lineWidth: isSelected ? 5.5 : 2.0,
+            lineOpacity,
             isSelected,
           },
           geometry: {
@@ -1514,7 +1558,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           const dy = wpB.lat - wpA.lat;
           const len = Math.hypot(dx, dy);
           if (len > 0.000001) {
-            const halfWidthDeg = 0.000045; // ~4.5 meters half-width aerial ribbon
+            const halfWidthDeg = 0.000045; // ~4.5 meters half-width aerial ribbon (9m wide beam)
             const nx = (-dy / len) * halfWidthDeg;
             const ny = (dx / len) * halfWidthDeg;
 
@@ -1530,10 +1574,10 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
               type: 'Feature',
               properties: {
                 type: 'corridor-3d',
+                is3d: true,
                 color,
-                base: Math.max(0, avgAlt - 1.2),
+                base: Math.max(0, avgAlt - 1.5),
                 height: avgAlt + 1.8,
-                corridorOpacity: isSelected ? 0.88 : 0.35,
               },
               geometry: {
                 type: 'Polygon',
@@ -1542,10 +1586,63 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             });
           }
         }
+
+        // 3D Waypoint Vertical Pylon Columns & Hovering Node Pads (True 3D Spatial Anchors)
+        drone.route.forEach((wp) => {
+          const wpAlt = wp.altitudeMeters || 65;
+          const pylonRadius = 0.000015; // ~1.6m radius vertical column
+          const nodeRadius = 0.000045;  // ~4.8m radius aerial node pad
+
+          // 1. Vertical Pylon Column (Ground Z=0 to Waypoint Altitude Z=wpAlt)
+          features.push({
+            type: 'Feature',
+            properties: {
+              type: 'pylon-3d',
+              is3d: true,
+              color: isSelected ? '#00f0ff' : color,
+              base: 0,
+              height: Math.max(1, wpAlt - 1.5),
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [wp.lng - pylonRadius, wp.lat - pylonRadius],
+                [wp.lng + pylonRadius, wp.lat - pylonRadius],
+                [wp.lng + pylonRadius, wp.lat + pylonRadius],
+                [wp.lng - pylonRadius, wp.lat + pylonRadius],
+                [wp.lng - pylonRadius, wp.lat - pylonRadius],
+              ]],
+            },
+          });
+
+          // 2. Aerial Hovering Waypoint Node Pad (at Cruise Altitude)
+          features.push({
+            type: 'Feature',
+            properties: {
+              type: 'node-3d',
+              is3d: true,
+              color: isSelected ? '#38bdf8' : color,
+              base: Math.max(0, wpAlt - 1.8),
+              height: wpAlt + 2.2,
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [wp.lng, wp.lat + nodeRadius],
+                [wp.lng + nodeRadius * 0.866, wp.lat + nodeRadius * 0.5],
+                [wp.lng + nodeRadius * 0.866, wp.lat - nodeRadius * 0.5],
+                [wp.lng, wp.lat - nodeRadius],
+                [wp.lng - nodeRadius * 0.866, wp.lat - nodeRadius * 0.5],
+                [wp.lng - nodeRadius * 0.866, wp.lat + nodeRadius * 0.5],
+                [wp.lng, wp.lat + nodeRadius],
+              ]],
+            },
+          });
+        });
       }
 
-      // 2B. Alternative candidate routes (for selected drone, or all drones)
-      if (isSelected && drone.routeCandidates && drone.routeCandidates.length > 1) {
+      // 2C. Alternative candidate routes (2D mode only)
+      if (viewMode !== '3d' && isSelected && drone.routeCandidates && drone.routeCandidates.length > 1) {
         drone.routeCandidates.forEach((cand) => {
           if (cand.id !== drone.selectedCandidateId && cand.waypoints.length >= 2) {
             features.push({
@@ -1582,7 +1679,6 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       type: 'FeatureCollection',
       features,
     });
-
     // Fade obstacles within 40m of active route (Requirement 1: fade buildings near route)
     const activeDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
     if (activeDrone && activeDrone.route && activeDrone.route.length >= 2) {
@@ -1607,7 +1703,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         } catch (_) {}
       });
     }
-  }, [drones, selectedDroneId, isMapLoaded, obstacles]);
+  }, [drones, selectedDroneId, isMapLoaded, obstacles, viewMode]);
 
   // Update Proposed Replan Route
   useEffect(() => {
@@ -1672,9 +1768,23 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           onSelectDrone(drone.id);
         });
 
+        let dronePixelRise = 0;
+        if (viewMode === '3d') {
+          const pitchDeg = map.getPitch();
+          if (pitchDeg > 5) {
+            const pitchRad = (pitchDeg * Math.PI) / 180;
+            const zoom = map.getZoom();
+            const metersPerPixel = (156543.03392 * Math.cos((drone.vitals.latitude * Math.PI) / 180)) / Math.pow(2, zoom);
+            const alt = drone.vitals.altitudeMeters || 65;
+            dronePixelRise = Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad));
+            dronePixelRise = Math.min(180, Math.max(0, dronePixelRise));
+          }
+        }
+
         marker = new maplibregl.Marker({
           element: el,
           anchor: 'center',
+          offset: [0, -dronePixelRise],
           pitchAlignment: 'viewport',
           rotationAlignment: 'viewport',
         })
@@ -1684,11 +1794,24 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         markersRef.current[drone.id] = marker;
       } else {
         const markerElement = marker.getElement();
+        let dronePixelRise = 0;
+        if (viewMode === '3d') {
+          const pitchDeg = map.getPitch();
+          if (pitchDeg > 5) {
+            const pitchRad = (pitchDeg * Math.PI) / 180;
+            const zoom = map.getZoom();
+            const metersPerPixel = (156543.03392 * Math.cos((drone.vitals.latitude * Math.PI) / 180)) / Math.pow(2, zoom);
+            const alt = drone.vitals.altitudeMeters || 65;
+            dronePixelRise = Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad));
+            dronePixelRise = Math.min(180, Math.max(0, dronePixelRise));
+          }
+        }
+        marker.setOffset([0, -dronePixelRise]);
         marker.setLngLat([drone.vitals.longitude, drone.vitals.latitude]);
         markerElement.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict, themeColor);
       }
     });
-  }, [drones, selectedDroneId, obstacleConflicts, isMapLoaded, onSelectDrone]);
+  }, [drones, selectedDroneId, obstacleConflicts, isMapLoaded, onSelectDrone, viewMode]);
 
   // 12-Layer Dynamic Visibility Synchronization
   useEffect(() => {
@@ -1727,12 +1850,66 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
     if (map.getLayer('obstacles-2d-outline')) {
       map.setLayoutProperty('obstacles-2d-outline', 'visibility', layerObstacles ? 'visible' : 'none');
     }
-    // 9. Planned Routes
-    ['flight-routes-planned', 'flight-routes-trail', 'flight-routes-original', 'flight-routes-3d-corridor'].forEach((l) => {
-      if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', layerPlannedRoutes ? 'visible' : 'none');
-    });
+    // 9. Planned Routes & Corridors
+    if (map.getLayer('flight-routes-planned')) {
+      map.setLayoutProperty(
+        'flight-routes-planned',
+        'visibility',
+        layerPlannedRoutes && viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('flight-routes-original')) {
+      map.setLayoutProperty(
+        'flight-routes-original',
+        'visibility',
+        layerPlannedRoutes && viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('flight-routes-alternative')) {
+      map.setLayoutProperty(
+        'flight-routes-alternative',
+        'visibility',
+        layerPlannedRoutes && viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('flight-routes-trail')) {
+      map.setLayoutProperty(
+        'flight-routes-trail',
+        'visibility',
+        layerPlannedRoutes ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('flight-routes-3d-corridor')) {
+      map.setLayoutProperty(
+        'flight-routes-3d-corridor',
+        'visibility',
+        layerPlannedRoutes && viewMode === '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('checkpoint-corridor-3d')) {
+      map.setLayoutProperty(
+        'checkpoint-corridor-3d',
+        'visibility',
+        viewMode === '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('checkpoint-corridor-line')) {
+      map.setLayoutProperty(
+        'checkpoint-corridor-line',
+        'visibility',
+        viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
+    if (map.getLayer('checkpoint-corridor-glow')) {
+      map.setLayoutProperty(
+        'checkpoint-corridor-glow',
+        'visibility',
+        viewMode !== '3d' ? 'visible' : 'none'
+      );
+    }
   }, [
     isMapLoaded,
+    viewMode,
     layerSatellite,
     layer3DBuildings,
     layerGroundRoads,
@@ -2001,16 +2178,63 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         onSelectWaypoint(wp.id);
       });
 
+      let pixelRise = 0;
+      if (viewMode === '3d') {
+        const pitchDeg = map.getPitch();
+        if (pitchDeg > 5) {
+          const pitchRad = (pitchDeg * Math.PI) / 180;
+          const zoom = map.getZoom();
+          const metersPerPixel = (156543.03392 * Math.cos((wp.lat * Math.PI) / 180)) / Math.pow(2, zoom);
+          const alt = wp.altitudeMeters || 65;
+          pixelRise = Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad));
+          pixelRise = Math.min(180, Math.max(0, pixelRise));
+        }
+      }
+
       const marker = new maplibregl.Marker({
         element: el,
         anchor: 'center',
+        offset: [0, -pixelRise],
       })
         .setLngLat([wp.lng, wp.lat])
         .addTo(map);
 
       waypointMarkersRef.current.push(marker);
     });
-  }, [drones, selectedDroneId, selectedWaypointId, layerWaypoints, isMapLoaded, onSelectWaypoint]);
+  }, [drones, selectedDroneId, selectedWaypointId, layerWaypoints, isMapLoaded, onSelectWaypoint, viewMode]);
+
+  // Dynamic update of waypoint marker vertical offsets during 3D camera tilt/zoom
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapLoaded || viewMode !== '3d') return;
+
+    const handleCameraMove = () => {
+      const pitchDeg = map.getPitch();
+      const pitchRad = (pitchDeg * Math.PI) / 180;
+      const zoom = map.getZoom();
+      const selectedDrone = drones.find((d) => d.id === selectedDroneId);
+      if (!selectedDrone || !selectedDrone.route) return;
+
+      selectedDrone.route.forEach((wp, idx) => {
+        const marker = waypointMarkersRef.current[idx];
+        if (marker) {
+          const metersPerPixel = (156543.03392 * Math.cos((wp.lat * Math.PI) / 180)) / Math.pow(2, zoom);
+          const alt = wp.altitudeMeters || 65;
+          const pixelRise = pitchDeg > 5
+            ? Math.min(180, Math.max(0, Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad))))
+            : 0;
+          marker.setOffset([0, -pixelRise]);
+        }
+      });
+    };
+
+    map.on('pitch', handleCameraMove);
+    map.on('zoom', handleCameraMove);
+    return () => {
+      map.off('pitch', handleCameraMove);
+      map.off('zoom', handleCameraMove);
+    };
+  }, [drones, selectedDroneId, isMapLoaded, viewMode]);
 
   // Render Destination Markers & Landings
   useEffect(() => {
@@ -2241,18 +2465,96 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
 
     if (checkpointMission && checkpointMission.checkpoints.length > 0) {
       if (source) {
+        const features: any[] = [];
+        if (viewMode !== '3d') {
+          features.push({
+            type: 'Feature',
+            properties: { is3d: false },
+            geometry: {
+              type: 'LineString',
+              coordinates: checkpointMission.checkpoints.map((cp) => [cp.lng, cp.lat]),
+            },
+          });
+        } else {
+          // True 3D aerial corridor for checkpoints above buildings
+          for (let s = 0; s < checkpointMission.checkpoints.length - 1; s++) {
+            const cpA = checkpointMission.checkpoints[s];
+            const cpB = checkpointMission.checkpoints[s + 1];
+            const altA = cpA.altitudeMeters || 65;
+            const altB = cpB.altitudeMeters || 65;
+            const avgAlt = (altA + altB) / 2;
+
+            const dx = (cpB.lng - cpA.lng) * Math.cos((cpA.lat * Math.PI) / 180);
+            const dy = cpB.lat - cpA.lat;
+            const len = Math.hypot(dx, dy);
+            if (len > 0.000001) {
+              const halfWidthDeg = 0.000045;
+              const nx = (-dy / len) * halfWidthDeg;
+              const ny = (dx / len) * halfWidthDeg;
+
+              features.push({
+                type: 'Feature',
+                properties: {
+                  is3d: true,
+                  color: '#00f0ff',
+                  base: Math.max(0, avgAlt - 1.5),
+                  height: avgAlt + 1.8,
+                },
+                geometry: {
+                  type: 'Polygon',
+                  coordinates: [[
+                    [cpA.lng + nx, cpA.lat + ny],
+                    [cpB.lng + nx, cpB.lat + ny],
+                    [cpB.lng - nx, cpB.lat - ny],
+                    [cpA.lng - nx, cpA.lat - ny],
+                    [cpA.lng + nx, cpA.lat + ny],
+                  ]],
+                },
+              });
+            }
+          }
+
+          // Pylons and nodes for checkpoints
+          checkpointMission.checkpoints.forEach((cp) => {
+            const cpAlt = cp.altitudeMeters || 65;
+            const pylonR = 0.000015;
+            const nodeR = 0.000045;
+            features.push({
+              type: 'Feature',
+              properties: { is3d: true, color: '#00f0ff', base: 0, height: Math.max(1, cpAlt - 1.5) },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [[
+                  [cp.lng - pylonR, cp.lat - pylonR],
+                  [cp.lng + pylonR, cp.lat - pylonR],
+                  [cp.lng + pylonR, cp.lat + pylonR],
+                  [cp.lng - pylonR, cp.lat + pylonR],
+                  [cp.lng - pylonR, cp.lat - pylonR],
+                ]],
+              },
+            });
+            features.push({
+              type: 'Feature',
+              properties: { is3d: true, color: '#38bdf8', base: Math.max(0, cpAlt - 1.8), height: cpAlt + 2.2 },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [[
+                  [cp.lng, cp.lat + nodeR],
+                  [cp.lng + nodeR * 0.866, cp.lat + nodeR * 0.5],
+                  [cp.lng + nodeR * 0.866, cp.lat - nodeR * 0.5],
+                  [cp.lng, cp.lat - nodeR],
+                  [cp.lng - nodeR * 0.866, cp.lat - nodeR * 0.5],
+                  [cp.lng - nodeR * 0.866, cp.lat + nodeR * 0.5],
+                  [cp.lng, cp.lat + nodeR],
+                ]],
+              },
+            });
+          });
+        }
+
         source.setData({
           type: 'FeatureCollection',
-          features: [
-            {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: checkpointMission.checkpoints.map((cp) => [cp.lng, cp.lat]),
-              },
-            },
-          ],
+          features,
         } as any);
       }
 
@@ -2324,7 +2626,20 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           </div>
         `;
 
-        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        let cpPixelRise = 0;
+        if (viewMode === '3d') {
+          const pitchDeg = map.getPitch();
+          if (pitchDeg > 5) {
+            const pitchRad = (pitchDeg * Math.PI) / 180;
+            const zoom = map.getZoom();
+            const metersPerPixel = (156543.03392 * Math.cos((cp.lat * Math.PI) / 180)) / Math.pow(2, zoom);
+            const alt = cp.altitudeMeters || 65;
+            cpPixelRise = Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad));
+            cpPixelRise = Math.min(180, Math.max(0, cpPixelRise));
+          }
+        }
+
+        const marker = new maplibregl.Marker({ element: el, anchor: 'center', offset: [0, -cpPixelRise] })
           .setLngLat([cp.lng, cp.lat])
           .addTo(map);
 
@@ -2335,7 +2650,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         source.setData({ type: 'FeatureCollection', features: [] } as any);
       }
     }
-  }, [checkpointMission, isMapLoaded, onSelectCheckpoint]);
+  }, [checkpointMission, isMapLoaded, onSelectCheckpoint, viewMode]);
 
   // === RENDER / ANIMATE SIMULATION DRONE MARKER (CHECKPOINT CONTROLLER / PX4) ===
   useEffect(() => {
@@ -2355,13 +2670,27 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
     const isError = checkpointMission.status === 'error';
     const droneColor = isError ? '#f43f5e' : isPaused ? '#fbbf24' : '#00f0ff';
 
+    let simPixelRise = 0;
+    if (viewMode === '3d') {
+      const pitchDeg = map.getPitch();
+      if (pitchDeg > 5) {
+        const pitchRad = (pitchDeg * Math.PI) / 180;
+        const zoom = map.getZoom();
+        const metersPerPixel = (156543.03392 * Math.cos((checkpointTelemetry.lat * Math.PI) / 180)) / Math.pow(2, zoom);
+        const alt = checkpointTelemetry.altitudeMeters || 65;
+        simPixelRise = Math.round((alt / Math.max(0.1, metersPerPixel)) * Math.sin(pitchRad));
+        simPixelRise = Math.min(180, Math.max(0, simPixelRise));
+      }
+    }
+
     if (!simDroneMarkerRef.current) {
       const el = document.createElement('div');
       el.style.cursor = 'pointer';
-      simDroneMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' })
+      simDroneMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center', offset: [0, -simPixelRise] })
         .setLngLat([checkpointTelemetry.lng, checkpointTelemetry.lat])
         .addTo(map);
     } else {
+      simDroneMarkerRef.current.setOffset([0, -simPixelRise]);
       simDroneMarkerRef.current.setLngLat([checkpointTelemetry.lng, checkpointTelemetry.lat]);
     }
 
@@ -2420,7 +2749,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         </div>
       </div>
     `;
-  }, [checkpointTelemetry, checkpointMission, isMapLoaded]);
+  }, [checkpointTelemetry, checkpointMission, isMapLoaded, viewMode]);
 
   // Camera Action Handlers (Requirement 5)
   const handleZoomIn = () => mapRef.current?.zoomIn();
