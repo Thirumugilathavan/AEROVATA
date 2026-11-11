@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Drone } from '../types/fleet';
 import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
+import { calculateBearing } from '../services/droneAStarRouter';
 
 interface DronePOVCameraProps {
   drone: Drone;
@@ -40,7 +41,27 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
     : (nextWp ? Math.round(getDistanceMeters(drone.vitals.latitude, drone.vitals.longitude, nextWp.lat, nextWp.lng)) : 0);
   const formattedNextDist = formatWaypointDistance(distToNextMeters);
 
-  // Real-time canvas animation for forward gimbal view
+  // ─── Real-time Physics-Synchronized Gimbal Camera Animation ───
+  const cameraPhysicsRef = useRef({
+    smoothHeading: drone.vitals.headingDegrees || 0,
+    smoothPitch: 0,
+    smoothRoll: 0,
+    smoothAltitude: drone.vitals.altitudeMeters || 60,
+    smoothSpeed: drone.vitals.groundSpeedKmh || 0,
+    worldDistanceMeters: 0,
+    prevHeading: drone.vitals.headingDegrees || 0,
+    lastTime: performance.now(),
+    prevDroneId: drone.id,
+  });
+
+  useEffect(() => {
+    const phys = cameraPhysicsRef.current;
+    if (phys.prevDroneId !== drone.id) {
+      phys.prevDroneId = drone.id;
+      phys.prevHeading = drone.vitals.headingDegrees || 0;
+    }
+  }, [drone.id, drone.vitals.headingDegrees]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -48,103 +69,247 @@ export const DronePOVCamera: React.FC<DronePOVCameraProps> = ({ drone, onExit })
     if (!ctx) return;
 
     let animationFrameId: number;
-    let offset = 0;
+    const phys = cameraPhysicsRef.current;
+    phys.lastTime = performance.now();
+
+    const URBAN_CORRIDOR_LANDMARKS = [
+      { id: 'b1', x: -130, zBase: 0, w: 55, h: 42, color: '#1e293b', accent: '#00f0ff' },
+      { id: 'b2', x: 140, zBase: 80, w: 75, h: 58, color: '#0f172a', accent: '#38bdf8' },
+      { id: 'b3', x: -150, zBase: 160, w: 68, h: 46, color: '#1e293b', accent: '#3b82f6' },
+      { id: 'b4', x: 135, zBase: 240, w: 70, h: 52, color: '#0f172a', accent: '#10b981' },
+      { id: 'b5', x: -125, zBase: 320, w: 60, h: 38, color: '#1e293b', accent: '#00f0ff' },
+    ];
 
     const render = () => {
-      offset = (offset + (drone.vitals.groundSpeedKmh / 3600) * 120) % 80;
+      const now = performance.now();
+      const dt = Math.max(0.005, Math.min(0.05, (now - phys.lastTime) / 1000));
+      phys.lastTime = now;
+
+      const targetHeading = drone.vitals.headingDegrees || 0;
+      const targetSpeed = drone.vitals.groundSpeedKmh || 0;
+      const targetAlt = drone.vitals.altitudeMeters || 60;
+      const climbRate = drone.vitals.verticalSpeedMs || 0;
+
+      // 1. Heading interpolation (shortest angular path)
+      let dHeading = (targetHeading - phys.smoothHeading) % 360;
+      if (dHeading > 180) dHeading -= 360;
+      if (dHeading < -180) dHeading += 360;
+      phys.smoothHeading = (phys.smoothHeading + dHeading * Math.min(1, dt * 5.0) + 360) % 360;
+
+      // Turn rate & banking
+      const turnRate = dHeading / Math.max(0.01, dt);
+      const targetRoll = Math.max(-12, Math.min(12, -turnRate * 0.32 * Math.min(1, Math.max(0.1, targetSpeed / 15))));
+      phys.smoothRoll += (targetRoll - phys.smoothRoll) * Math.min(1, dt * 6.5);
+
+      // Pitch dynamics
+      const targetPitch = Math.max(-7, Math.min(7, (targetSpeed / 60) * 3.0 - climbRate * 2.2));
+      phys.smoothPitch += (targetPitch - phys.smoothPitch) * Math.min(1, dt * 5.5);
+
+      // Smoothing
+      phys.smoothAltitude += (targetAlt - phys.smoothAltitude) * Math.min(1, dt * 4.5);
+      phys.smoothSpeed += (targetSpeed - phys.smoothSpeed) * Math.min(1, dt * 5.5);
+      phys.worldDistanceMeters += (phys.smoothSpeed / 3.6) * dt;
 
       const width = canvas.width;
       const height = canvas.height;
 
-      // 1. Clear background
+      ctx.save();
       ctx.clearRect(0, 0, width, height);
 
-      // Sky and ground split (Horizon based on pitch angle, banking based on heading variation)
-      const horizonY = height * 0.45;
+      const focalLength = 320 * zoom;
+      const horizonY = height * (0.42 + (Math.max(20, Math.min(120, phys.smoothAltitude)) / 120) * 0.06) + phys.smoothPitch * 3.5;
+      const rollRad = phys.smoothRoll * (Math.PI / 180);
 
       // Sky Gradient
       const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
       if (visionMode === 'flir') {
-        skyGrad.addColorStop(0, '#0a0d24');
-        skyGrad.addColorStop(1, '#1e1a38');
+        skyGrad.addColorStop(0, '#070a1a');
+        skyGrad.addColorStop(1, '#1b1430');
       } else if (visionMode === 'nvg') {
-        skyGrad.addColorStop(0, '#001a08');
-        skyGrad.addColorStop(1, '#003310');
+        skyGrad.addColorStop(0, '#001406');
+        skyGrad.addColorStop(1, '#00290c');
       } else {
-        skyGrad.addColorStop(0, '#10223b');
-        skyGrad.addColorStop(1, '#2c4b6e');
+        skyGrad.addColorStop(0, '#050c18');
+        skyGrad.addColorStop(1, '#14233c');
       }
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, width, horizonY);
 
-      // Ground Gradient (Perspective flight plane)
+      // Ground Gradient
       const groundGrad = ctx.createLinearGradient(0, horizonY, 0, height);
       if (visionMode === 'flir') {
-        groundGrad.addColorStop(0, '#2d1847');
-        groundGrad.addColorStop(0.5, '#4a154b');
-        groundGrad.addColorStop(1, '#f97316'); // Heat map
+        groundGrad.addColorStop(0, '#261238');
+        groundGrad.addColorStop(0.5, '#421444');
+        groundGrad.addColorStop(1, '#ea580c');
       } else if (visionMode === 'nvg') {
-        groundGrad.addColorStop(0, '#023012');
-        groundGrad.addColorStop(1, '#056126');
+        groundGrad.addColorStop(0, '#02240e');
+        groundGrad.addColorStop(1, '#044d1e');
       } else {
-        groundGrad.addColorStop(0, '#1b321a'); // Dark lush foliage
-        groundGrad.addColorStop(1, '#2d4a2a');
+        groundGrad.addColorStop(0, '#0a121c');
+        groundGrad.addColorStop(1, '#121b28');
       }
       ctx.fillStyle = groundGrad;
       ctx.fillRect(0, horizonY, width, height - horizonY);
 
-      // Perspective Grid Lines (Ground moving underneath)
+      // Perspective Air Corridor
       ctx.save();
-      ctx.strokeStyle = visionMode === 'flir' ? 'rgba(249, 115, 22, 0.35)' : visionMode === 'nvg' ? 'rgba(34, 197, 94, 0.45)' : 'rgba(255, 255, 255, 0.25)';
+      ctx.translate(width / 2, horizonY);
+      ctx.rotate(rollRad);
+
+      const corridorWidthTop = 45 * zoom;
+      const corridorWidthBottom = 460 * zoom;
+
+      ctx.fillStyle = visionMode === 'flir' ? '#331d47' : visionMode === 'nvg' ? '#062913' : '#141d2c';
+      ctx.beginPath();
+      ctx.moveTo(-corridorWidthTop, 0);
+      ctx.lineTo(corridorWidthTop, 0);
+      ctx.lineTo(corridorWidthBottom, height - horizonY);
+      ctx.lineTo(-corridorWidthBottom, height - horizonY);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = visionMode === 'flir' ? '#f59e0b' : visionMode === 'nvg' ? '#22c55e' : '#00f0ffaa';
+      ctx.lineWidth = 2 * zoom;
+      ctx.stroke();
+
+      // Ground depth lines
+      const gridInterval = 30;
+      const distOffset = phys.worldDistanceMeters % gridInterval;
+      ctx.strokeStyle = visionMode === 'flir' ? 'rgba(245,158,11,0.2)' : visionMode === 'nvg' ? 'rgba(34,197,94,0.25)' : 'rgba(0,240,255,0.2)';
       ctx.lineWidth = 1;
-
-      // Vanishing point
-      const vpX = width / 2;
-      const vpY = horizonY;
-
-      // Perspective radial rays
-      for (let x = -width; x <= width * 2; x += 120) {
-        ctx.beginPath();
-        ctx.moveTo(vpX, vpY);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-      }
-
-      // Moving transverse depth lines
-      for (let y = horizonY + 15; y < height; y += (y - horizonY) * 0.45) {
-        const adjustedY = y + (offset * ((y - horizonY) / height));
-        if (adjustedY <= height) {
-          ctx.beginPath();
-          ctx.moveTo(0, adjustedY);
-          ctx.lineTo(width, adjustedY);
-          ctx.stroke();
+      for (let z = 15; z < 320; z += gridInterval) {
+        const lineZ = z - distOffset;
+        if (lineZ > 8) {
+          const depthY = (focalLength * 12) / lineZ;
+          if (depthY < height - horizonY) {
+            const spanX = corridorWidthTop + (depthY / (height - horizonY)) * (corridorWidthBottom - corridorWidthTop);
+            ctx.beginPath();
+            ctx.moveTo(-spanX, depthY);
+            ctx.lineTo(spanX, depthY);
+            ctx.stroke();
+          }
         }
       }
 
-      // Simulated 3D structures / buildings in the field of view
-      const buildingColor = visionMode === 'flir' ? '#ffedd5' : visionMode === 'nvg' ? '#4ade80' : '#475569';
-      ctx.fillStyle = buildingColor;
+      // Center dashes
+      ctx.fillStyle = visionMode === 'flir' ? '#fed7aa' : visionMode === 'nvg' ? '#86efac' : '#ffffff';
+      const dashInterval = 25;
+      const dashOffset = phys.worldDistanceMeters % dashInterval;
+      for (let z = 12; z < 300; z += dashInterval) {
+        const dZ = z - dashOffset;
+        if (dZ > 6) {
+          const depthY = (focalLength * 12) / dZ;
+          if (depthY < height - horizonY) {
+            const dW = Math.max(3, (depthY / 28) * zoom);
+            const dH = Math.max(6, (depthY / 18) * zoom);
+            ctx.fillRect(-dW / 2, depthY, dW, dH);
+          }
+        }
+      }
 
-      // Central target building (Waypoint destination)
-      const targetBldgX = width * 0.52 - 30;
-      const targetBldgY = horizonY + 25;
-      ctx.fillRect(targetBldgX, targetBldgY, 60, 45);
+      // Parallax 3D Urban Buildings
+      const loopLen = 380;
+      for (const b of URBAN_CORRIDOR_LANDMARKS) {
+        const relZ = ((b.zBase - phys.worldDistanceMeters) % loopLen + loopLen) % loopLen;
+        if (relZ > 12) {
+          const scale = focalLength / relZ;
+          const bldgScreenX = b.x * scale;
+          const bldgBottomY = (focalLength * 12) / relZ;
+          const bldgW = b.w * scale * zoom;
+          const bldgH = b.h * scale * zoom;
+          const bldgTopY = bldgBottomY - bldgH;
 
-      // Distant tree cluster
-      ctx.fillStyle = visionMode === 'flir' ? '#fbbf24' : visionMode === 'nvg' ? '#15803d' : '#1e3a1e';
-      ctx.beginPath();
-      ctx.arc(width * 0.35, horizonY + 35, 22, 0, Math.PI * 2);
-      ctx.fill();
+          ctx.fillStyle = visionMode === 'flir' ? '#ffedd5' : visionMode === 'nvg' ? '#86efac' : b.color;
+          ctx.strokeStyle = visionMode === 'flir' ? '#f97316' : visionMode === 'nvg' ? '#22c55e' : b.accent;
+          ctx.lineWidth = 1.2;
+          ctx.fillRect(bldgScreenX - bldgW / 2, bldgTopY, bldgW, bldgH);
+          ctx.strokeRect(bldgScreenX - bldgW / 2, bldgTopY, bldgW, bldgH);
+
+          // Rooftop hazard beacon
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath();
+          ctx.arc(bldgScreenX, bldgTopY - 2, Math.max(2, 4 * scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       ctx.restore();
 
+      // Active Waypoint Reticle
+      if (nextWp) {
+        const wpBearing = calculateBearing(drone.vitals.latitude, drone.vitals.longitude, nextWp.lat, nextWp.lng);
+        let relAngle = (wpBearing - phys.smoothHeading) % 360;
+        if (relAngle > 180) relAngle -= 360;
+        if (relAngle < -180) relAngle += 360;
+
+        if (Math.abs(relAngle) < 38) {
+          const wpX = (width / 2) + Math.tan(relAngle * Math.PI / 180) * (width * 0.85) * zoom;
+          const wpY = horizonY - 26;
+
+          ctx.save();
+          ctx.translate(wpX, wpY);
+
+          ctx.strokeStyle = '#00f0ff';
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(0, -14);
+          ctx.lineTo(14, 0);
+          ctx.lineTo(0, 14);
+          ctx.lineTo(-14, 0);
+          ctx.closePath();
+          ctx.stroke();
+
+          ctx.fillStyle = 'rgba(8, 20, 36, 0.88)';
+          ctx.strokeStyle = '#00f0ff88';
+          ctx.lineWidth = 1;
+          const boxW = 148;
+          const boxH = 34;
+          ctx.fillRect(-boxW / 2, -54, boxW, boxH);
+          ctx.strokeRect(-boxW / 2, -54, boxW, boxH);
+
+          ctx.fillStyle = '#00f0ff';
+          ctx.font = 'bold 10px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`WP-${targetIdx + 1} ${nextWp.name.substring(0, 14)}`, 0, -42);
+
+          ctx.fillStyle = '#94a3b8';
+          ctx.font = '9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`RNG: ${formattedNextDist} • ALT: ${nextWp.altitudeMeters}m`, 0, -28);
+
+          ctx.restore();
+        }
+      }
+
+      // Clear Simulated Sensor Badges
+      ctx.fillStyle = 'rgba(10, 16, 28, 0.82)';
+      ctx.strokeStyle = '#38bdf844';
+      ctx.lineWidth = 1;
+      ctx.fillRect(16, 16, 280, 26);
+      ctx.strokeRect(16, 16, 280, 26);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('[SIMULATED 3D SENSOR VIEW — POV GIMBAL]', 24, 32);
+
+      ctx.fillStyle = 'rgba(10, 16, 28, 0.82)';
+      ctx.strokeStyle = '#f59e0b44';
+      ctx.lineWidth = 1;
+      ctx.fillRect(width - 296, 16, 280, 26);
+      ctx.strokeRect(width - 296, 16, 280, 26);
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('[SYNTHETIC GIMBAL FEED • NOT REAL FOOTAGE]', width - 288, 32);
+
+      ctx.restore();
       animationFrameId = requestAnimationFrame(render);
     };
 
     render();
 
     return () => cancelAnimationFrame(animationFrameId);
-  }, [drone.vitals.groundSpeedKmh, visionMode]);
+  }, [drone.id, drone.vitals.groundSpeedKmh, drone.vitals.headingDegrees, drone.vitals.altitudeMeters, drone.vitals.verticalSpeedMs, visionMode, zoom, nextWp, targetIdx, formattedNextDist]);
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden flex flex-col select-none">

@@ -41,8 +41,10 @@ import {
 import { QuadcopterIcon } from './icons/QuadcopterIcon';
 import type { Mission, MissionTelemetry, CameraConnectionStatus } from '../types/mission';
 import type { Drone } from '../types/fleet';
+import { INITIAL_DRONES } from '../data/mockFleet';
 import { apiService } from '../services/api/index';
 import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
+import { calculateBearing } from '../services/droneAStarRouter';
 
 interface LiveCameraScreenProps {
   onBackToMap?: () => void;
@@ -67,8 +69,16 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
   const [mission, setMission] = useState<Mission | null>(() => controller.getMission());
   const [telemetry, setTelemetry] = useState<MissionTelemetry | null>(() => controller.getTelemetry());
 
-  // Determine active drone
-  const activeDrone = drones.find((d) => d.id === selectedDroneId) || drones[0] || null;
+  // Selected drone state with fallback to initial fleet
+  const [internalDroneId, setInternalDroneId] = useState<string>(selectedDroneId || 'AV-01');
+  const effectiveDroneId = selectedDroneId || internalDroneId;
+  const effectiveDrones = (drones && drones.length > 0) ? drones : INITIAL_DRONES;
+  const activeDrone = effectiveDrones.find((d) => d.id === effectiveDroneId) || effectiveDrones[0] || null;
+
+  const handleSelectDrone = (id: string) => {
+    setInternalDroneId(id);
+    if (onSelectDrone) onSelectDrone(id);
+  };
 
   // Camera stream feed mode
   const [feedMode, setFeedMode] = useState<StreamMode>('LIVE_BACKEND');
@@ -118,7 +128,28 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
         : 340);
   const formattedNextDist = formatWaypointDistance(distToNextWp);
 
-  // High-fidelity 3D Canvas Gimbal Viewport (Runs when TACTICAL_3D_FPV or as fallback)
+  // ─── High-Fidelity Physics-Synchronized 3D Gimbal Viewport ───
+  const cameraPhysicsRef = useRef({
+    smoothHeading: heading,
+    smoothPitch: 0,
+    smoothRoll: 0,
+    smoothAltitude: altitude,
+    smoothSpeed: speed,
+    worldDistanceMeters: 0,
+    prevHeading: heading,
+    lastTime: performance.now(),
+    prevDroneId: selectedDroneId,
+  });
+
+  // Keep physics ref updated when drone switches or route changes
+  useEffect(() => {
+    const phys = cameraPhysicsRef.current;
+    if (phys.prevDroneId !== selectedDroneId) {
+      phys.prevDroneId = selectedDroneId;
+      phys.prevHeading = heading;
+    }
+  }, [selectedDroneId, heading]);
+
   useEffect(() => {
     if (feedMode !== 'TACTICAL_3D_FPV' && (!backendStreamFailed || feedMode !== 'LIVE_BACKEND')) return;
 
@@ -127,12 +158,47 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let time = 0;
-    let offset = 0;
+    const phys = cameraPhysicsRef.current;
+    phys.lastTime = performance.now();
+
+    // Urban landmarks along corridor (dynamic parallax buildings)
+    const URBAN_CORRIDOR_LANDMARKS = [
+      { id: 'b1', x: -140, zBase: 0, w: 55, h: 42, color: '#1e293b', accent: '#00f0ff', name: 'PSG Robotics Wing' },
+      { id: 'b2', x: 135, zBase: 75, w: 75, h: 58, color: '#0f172a', accent: '#38bdf8', name: 'TIDEL Park IT SEZ' },
+      { id: 'b3', x: -160, zBase: 160, w: 68, h: 46, color: '#1e293b', accent: '#3b82f6', name: 'Peelamedu Tech Core' },
+      { id: 'b4', x: 140, zBase: 240, w: 70, h: 52, color: '#0f172a', accent: '#10b981', name: 'KMCH Speciality Helipad' },
+      { id: 'b5', x: -130, zBase: 310, w: 60, h: 38, color: '#1e293b', accent: '#00f0ff', name: 'Nava India Hub' },
+    ];
 
     const render = () => {
-      time += 0.02;
-      offset = (offset + (speed / 3600) * 140) % 80;
+      const now = performance.now();
+      const dt = Math.max(0.005, Math.min(0.05, (now - phys.lastTime) / 1000));
+      phys.lastTime = now;
+
+      // 1. Heading interpolation (shortest angular path)
+      let dHeading = (heading - phys.smoothHeading) % 360;
+      if (dHeading > 180) dHeading -= 360;
+      if (dHeading < -180) dHeading += 360;
+      phys.smoothHeading = (phys.smoothHeading + dHeading * Math.min(1, dt * 5.0) + 360) % 360;
+
+      // Turning angular velocity (degrees/sec)
+      const turnRate = dHeading / Math.max(0.01, dt);
+
+      // 2. Aerodynamic banking (roll angle into turns)
+      const targetRoll = Math.max(-12, Math.min(12, -turnRate * 0.32 * Math.min(1, Math.max(0.1, speed / 15))));
+      phys.smoothRoll += (targetRoll - phys.smoothRoll) * Math.min(1, dt * 6.5);
+
+      // 3. Pitch dynamics (nose tilt based on cruise speed & vertical speed)
+      const climbRate = activeDrone?.vitals.verticalSpeedMs || 0;
+      const targetPitch = Math.max(-7, Math.min(7, (speed / 60) * 3.0 - climbRate * 2.2));
+      phys.smoothPitch += (targetPitch - phys.smoothPitch) * Math.min(1, dt * 5.5);
+
+      // 4. Altitude & Speed smoothing
+      phys.smoothAltitude += (altitude - phys.smoothAltitude) * Math.min(1, dt * 4.5);
+      phys.smoothSpeed += (speed - phys.smoothSpeed) * Math.min(1, dt * 5.5);
+
+      // 5. Continuous metric distance accumulation
+      phys.worldDistanceMeters += (phys.smoothSpeed / 3.6) * dt;
 
       const width = canvas.width;
       const height = canvas.height;
@@ -140,52 +206,52 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
       ctx.save();
       ctx.clearRect(0, 0, width, height);
 
-      // Pitch and roll simulated with realistic motion
-      const pitchOffset = Math.sin(time * 0.8) * 8 + (activeDrone?.vitals.verticalSpeedMs || 0) * 4;
-      const rollAngle = Math.sin(time * 0.5) * 0.02 * (speed > 5 ? 1 : 0.2);
+      // Camera focal length & horizon placement
+      const focalLength = 320 * zoomLevel;
+      const horizonY = height * (0.42 + (Math.max(20, Math.min(120, phys.smoothAltitude)) / 120) * 0.06) + phys.smoothPitch * 3.5;
+      const rollRad = phys.smoothRoll * (Math.PI / 180);
 
-      // 1. SKY GRADIENT
-      const horizonY = height * 0.44 + pitchOffset;
+      // ─── 1. SKY GRADIENT ───
       const skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY);
       if (visionMode === 'flir') {
-        skyGrad.addColorStop(0, '#0a0d24');
-        skyGrad.addColorStop(1, '#1e1a38');
+        skyGrad.addColorStop(0, '#070a1a');
+        skyGrad.addColorStop(1, '#1b1430');
       } else if (visionMode === 'nvg') {
-        skyGrad.addColorStop(0, '#001a08');
-        skyGrad.addColorStop(1, '#003310');
+        skyGrad.addColorStop(0, '#001406');
+        skyGrad.addColorStop(1, '#00290c');
       } else {
-        skyGrad.addColorStop(0, '#061022');
-        skyGrad.addColorStop(1, '#182f4e');
+        skyGrad.addColorStop(0, '#050c18');
+        skyGrad.addColorStop(1, '#14233c');
       }
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, width, horizonY);
 
-      // 2. GROUND GRADIENT (Perspective flight plane)
+      // ─── 2. GROUND GRADIENT ───
       const groundGrad = ctx.createLinearGradient(0, horizonY, 0, height);
       if (visionMode === 'flir') {
-        groundGrad.addColorStop(0, '#2d1847');
-        groundGrad.addColorStop(0.5, '#4a154b');
-        groundGrad.addColorStop(1, '#f97316');
+        groundGrad.addColorStop(0, '#261238');
+        groundGrad.addColorStop(0.5, '#421444');
+        groundGrad.addColorStop(1, '#ea580c');
       } else if (visionMode === 'nvg') {
-        groundGrad.addColorStop(0, '#023012');
-        groundGrad.addColorStop(1, '#056126');
+        groundGrad.addColorStop(0, '#02240e');
+        groundGrad.addColorStop(1, '#044d1e');
       } else {
-        groundGrad.addColorStop(0, '#0e1826');
-        groundGrad.addColorStop(1, '#162232');
+        groundGrad.addColorStop(0, '#0a121c');
+        groundGrad.addColorStop(1, '#121b28');
       }
       ctx.fillStyle = groundGrad;
       ctx.fillRect(0, horizonY, width, height - horizonY);
 
-      // 3. PERSPECTIVE ROADWAY / AVINASHI VIADUCT FLIGHT CORRIDOR
+      // ─── 3. PERSPECTIVE AIR CORRIDOR & GROUND RUNWAY ───
       ctx.save();
       ctx.translate(width / 2, horizonY);
-      ctx.rotate(rollAngle);
+      ctx.rotate(rollRad);
 
-      // Moving central road corridor
-      const corridorWidthTop = 40 * zoomLevel;
-      const corridorWidthBottom = 420 * zoomLevel;
+      const corridorWidthTop = 45 * zoomLevel;
+      const corridorWidthBottom = 460 * zoomLevel;
 
-      ctx.fillStyle = visionMode === 'flir' ? '#3d2558' : visionMode === 'nvg' ? '#083318' : '#1a2436';
+      // Flight corridor surface
+      ctx.fillStyle = visionMode === 'flir' ? '#331d47' : visionMode === 'nvg' ? '#062913' : '#141d2c';
       ctx.beginPath();
       ctx.moveTo(-corridorWidthTop, 0);
       ctx.lineTo(corridorWidthTop, 0);
@@ -194,61 +260,164 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
       ctx.closePath();
       ctx.fill();
 
-      // Roadway border lines
-      ctx.strokeStyle = visionMode === 'flir' ? '#fbbf24' : visionMode === 'nvg' ? '#4ade80' : '#00f0ff88';
+      // Border guidelines
+      ctx.strokeStyle = visionMode === 'flir' ? '#f59e0b' : visionMode === 'nvg' ? '#22c55e' : '#00f0ffaa';
       ctx.lineWidth = 2 * zoomLevel;
       ctx.stroke();
 
-      // Moving asphalt road dashes
-      ctx.fillStyle = '#ffffff';
-      for (let y = 15; y < height - horizonY; y += (y + 10) * 0.4) {
-        const adjustedY = y + (offset * (y / (height - horizonY)));
-        if (adjustedY <= height - horizonY) {
-          const dashWidth = 4 + (adjustedY / 30) * zoomLevel;
-          const dashHeight = 10 + (adjustedY / 20) * zoomLevel;
-          ctx.fillRect(-dashWidth / 2, adjustedY, dashWidth, dashHeight);
+      // Perspective ground grid depth lines (continuous speed-synchronized)
+      const gridIntervalMeters = 30;
+      const distOffset = phys.worldDistanceMeters % gridIntervalMeters;
+      ctx.strokeStyle = visionMode === 'flir' ? 'rgba(245,158,11,0.2)' : visionMode === 'nvg' ? 'rgba(34,197,94,0.25)' : 'rgba(0,240,255,0.2)';
+      ctx.lineWidth = 1;
+
+      for (let z = 15; z < 320; z += gridIntervalMeters) {
+        const lineZ = z - distOffset;
+        if (lineZ > 8) {
+          const depthY = (focalLength * 12) / lineZ;
+          if (depthY < height - horizonY) {
+            const spanX = corridorWidthTop + (depthY / (height - horizonY)) * (corridorWidthBottom - corridorWidthTop);
+            ctx.beginPath();
+            ctx.moveTo(-spanX, depthY);
+            ctx.lineTo(spanX, depthY);
+            ctx.stroke();
+          }
         }
       }
 
-      // 4. 3D LANDMARK SILHOUETTES (Avinashi Elevated Expressway & TIDEL Park Tower)
-      const bldgColor = visionMode === 'flir' ? '#ffedd5' : visionMode === 'nvg' ? '#86efac' : '#223249';
-      const bldgBorder = visionMode === 'flir' ? '#f97316' : visionMode === 'nvg' ? '#22c55e' : '#00f0ff';
-
-      // Left Viaduct Pillars
-      for (let px of [-corridorWidthTop - 60, -corridorWidthTop - 120, -corridorWidthTop - 180]) {
-        ctx.fillStyle = bldgColor;
-        ctx.strokeStyle = bldgBorder;
-        ctx.lineWidth = 1;
-        ctx.fillRect(px, -45 * zoomLevel, 14 * zoomLevel, 50 * zoomLevel);
-        ctx.strokeRect(px, -45 * zoomLevel, 14 * zoomLevel, 50 * zoomLevel);
-      }
-
-      // Right Landmark Tower (CMCH / TIDEL Park)
-      const towerX = corridorWidthTop + 65;
-      const towerH = 110 * zoomLevel;
-      const towerW = 75 * zoomLevel;
-      ctx.fillStyle = bldgColor;
-      ctx.strokeStyle = bldgBorder;
-      ctx.fillRect(towerX, -towerH + 10, towerW, towerH);
-      ctx.strokeRect(towerX, -towerH + 10, towerW, towerH);
-
-      // Window illumination grid
-      ctx.fillStyle = visionMode === 'flir' ? '#fbbf24' : visionMode === 'nvg' ? '#4ade80' : '#00f0ff99';
-      for (let wy = -towerH + 20; wy < -5; wy += 16 * zoomLevel) {
-        for (let wx = towerX + 8; wx < towerX + towerW - 8; wx += 14 * zoomLevel) {
-          ctx.fillRect(wx, wy, 6 * zoomLevel, 8 * zoomLevel);
+      // Moving center road dashes
+      ctx.fillStyle = visionMode === 'flir' ? '#fed7aa' : visionMode === 'nvg' ? '#86efac' : '#ffffff';
+      const dashInterval = 25;
+      const dashOffset = phys.worldDistanceMeters % dashInterval;
+      for (let z = 12; z < 300; z += dashInterval) {
+        const dZ = z - dashOffset;
+        if (dZ > 6) {
+          const depthY = (focalLength * 12) / dZ;
+          if (depthY < height - horizonY) {
+            const dW = Math.max(3, (depthY / 28) * zoomLevel);
+            const dH = Math.max(6, (depthY / 18) * zoomLevel);
+            ctx.fillRect(-dW / 2, depthY, dW, dH);
+          }
         }
       }
 
-      // Helipad Beacon on top of tower
-      ctx.fillStyle = '#ef4444';
-      ctx.beginPath();
-      ctx.arc(towerX + towerW / 2, -towerH + 6, (Math.sin(time * 6) > 0 ? 5 : 2) * zoomLevel, 0, Math.PI * 2);
-      ctx.fill();
+      // ─── 4. PARALLAX 3D URBAN BUILDINGS ON CORRIDOR FLANKS ───
+      const corridorLoop = 380;
+      for (const bldg of URBAN_CORRIDOR_LANDMARKS) {
+        let relZ = ((bldg.zBase - phys.worldDistanceMeters) % corridorLoop + corridorLoop) % corridorLoop;
+        if (relZ > 12) {
+          const scale = focalLength / relZ;
+          const bldgScreenX = bldg.x * scale;
+          const bldgBottomY = (focalLength * 12) / relZ;
+          const bldgW = bldg.w * scale * zoomLevel;
+          const bldgH = bldg.h * scale * zoomLevel;
+          const bldgTopY = bldgBottomY - bldgH;
+
+          // Building facade
+          ctx.fillStyle = visionMode === 'flir' ? '#ffedd5' : visionMode === 'nvg' ? '#86efac' : bldg.color;
+          ctx.strokeStyle = visionMode === 'flir' ? '#f97316' : visionMode === 'nvg' ? '#22c55e' : bldg.accent;
+          ctx.lineWidth = 1.2;
+          ctx.fillRect(bldgScreenX - bldgW / 2, bldgTopY, bldgW, bldgH);
+          ctx.strokeRect(bldgScreenX - bldgW / 2, bldgTopY, bldgW, bldgH);
+
+          // Windows grid
+          const winColor = visionMode === 'flir' ? '#fbbf24' : visionMode === 'nvg' ? '#4ade80' : `${bldg.accent}88`;
+          ctx.fillStyle = winColor;
+          const stepY = Math.max(4, bldgH / 6);
+          const stepX = Math.max(4, bldgW / 4);
+          for (let wy = bldgTopY + stepY; wy < bldgBottomY - 4; wy += stepY) {
+            for (let wx = bldgScreenX - bldgW / 2 + stepX / 2; wx < bldgScreenX + bldgW / 2 - 2; wx += stepX) {
+              ctx.fillRect(wx, wy, Math.max(2, stepX * 0.45), Math.max(2, stepY * 0.45));
+            }
+          }
+
+          // Rooftop hazard beacon (red pulsing)
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath();
+          ctx.arc(bldgScreenX, bldgTopY - 2, Math.max(2, 4 * scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.restore(); // restore roll/translate
+
+      // ─── 5. SYNCHRONIZED WAYPOINT TARGET LOCK RETICLE IN 3D VIEWPORT ───
+      if (nextWaypoint && activeDrone) {
+        const wpBearing = calculateBearing(
+          activeDrone.vitals.latitude,
+          activeDrone.vitals.longitude,
+          nextWaypoint.lat,
+          nextWaypoint.lng
+        );
+        let relAngle = (wpBearing - phys.smoothHeading) % 360;
+        if (relAngle > 180) relAngle -= 360;
+        if (relAngle < -180) relAngle += 360;
+
+        if (Math.abs(relAngle) < 38) {
+          const wpX = (width / 2) + Math.tan(relAngle * Math.PI / 180) * (width * 0.85) * zoomLevel;
+          const wpY = horizonY - 26;
+
+          ctx.save();
+          ctx.translate(wpX, wpY);
+
+          // Diamond lock reticle
+          ctx.strokeStyle = '#00f0ff';
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(0, -14);
+          ctx.lineTo(14, 0);
+          ctx.lineTo(0, 14);
+          ctx.lineTo(-14, 0);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Target Info Box
+          ctx.fillStyle = 'rgba(8, 20, 36, 0.88)';
+          ctx.strokeStyle = '#00f0ff88';
+          ctx.lineWidth = 1;
+          const boxW = 148;
+          const boxH = 34;
+          ctx.fillRect(-boxW / 2, -54, boxW, boxH);
+          ctx.strokeRect(-boxW / 2, -54, boxW, boxH);
+
+          ctx.fillStyle = '#00f0ff';
+          ctx.font = 'bold 10px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`WP-${targetIdx + 1} ${nextWaypoint.name.substring(0, 14)}`, 0, -42);
+
+          ctx.fillStyle = '#94a3b8';
+          ctx.font = '9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`RNG: ${formattedNextDist} • ALT: ${nextWaypoint.altitudeMeters}m`, 0, -28);
+
+          ctx.restore();
+        }
+      }
+
+      // ─── 6. CLEAR SIMULATED SENSOR WATERMARK / BADGES ───
+      // Top-Left Simulated Badge
+      ctx.fillStyle = 'rgba(10, 16, 28, 0.82)';
+      ctx.strokeStyle = '#38bdf844';
+      ctx.lineWidth = 1;
+      ctx.fillRect(16, 16, 310, 28);
+      ctx.strokeRect(16, 16, 310, 28);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('[SIMULATED 3D SENSOR VIEW — PHYSICS SYNCHRONIZED]', 24, 33);
+
+      // Top-Right Simulated Disclaimer
+      ctx.fillStyle = 'rgba(10, 16, 28, 0.82)';
+      ctx.strokeStyle = '#f59e0b44';
+      ctx.lineWidth = 1;
+      ctx.fillRect(width - 326, 16, 310, 28);
+      ctx.strokeRect(width - 326, 16, 310, 28);
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('[SYNTHETIC GIMBAL FEED • NOT REAL CAMERA FOOTAGE]', width - 318, 33);
 
       ctx.restore();
-      ctx.restore();
-
       animationFrameRef.current = requestAnimationFrame(render);
     };
 
@@ -259,7 +428,7 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [feedMode, backendStreamFailed, speed, heading, altitude, visionMode, zoomLevel, activeDrone]);
+  }, [feedMode, backendStreamFailed, speed, heading, altitude, visionMode, zoomLevel, activeDrone, nextWaypoint, targetIdx, formattedNextDist]);
 
   const activeDroneCallsign = activeDrone?.callsign || 'DRONE 01';
   const backendStreamUrl = `http://localhost:8000/api/v1/drones/${activeDrone?.id || 'AV-01'}/stream`;
@@ -291,13 +460,13 @@ export const LiveCameraScreen: React.FC<LiveCameraScreenProps> = ({
 
         {/* Center: SYNCHRONIZED MULTI-DRONE SELECTION BAR */}
         <div className="flex items-center gap-1.5 overflow-x-auto max-w-2xl px-1 scrollbar-none">
-          {drones.map((d) => {
-            const isSelected = d.id === selectedDroneId;
+          {effectiveDrones.map((d) => {
+            const isSelected = d.id === (activeDrone?.id || effectiveDroneId);
             const bat = Math.round(d.vitals.batteryPercentage);
             return (
               <button
                 key={d.id}
-                onClick={() => onSelectDrone && onSelectDrone(d.id)}
+                onClick={() => handleSelectDrone(d.id)}
                 className={`px-3 py-1 rounded text-xs font-mono font-bold flex items-center gap-2 transition-all shrink-0 border ${
                   isSelected
                     ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.4)] ring-1 ring-cyan-400/50'

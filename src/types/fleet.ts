@@ -161,6 +161,7 @@ export interface Drone {
   configuredCruiseAltitudeMeters?: number;
   routeValidationStatus?: RouteValidationStatus;
   routeValidationDetails?: RouteValidationResult;
+  routeWarnings?: string[];
 }
 
 export interface RouteComparisonParameter {

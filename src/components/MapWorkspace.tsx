@@ -508,6 +508,59 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const [selectedAirspaceZone, setSelectedAirspaceZone] = useState<OfficialAirspaceZone | null>(null);
   const [showAirspaceLegend, setShowAirspaceLegend] = useState(true);
 
+// Query dynamic OSM vector building features to supplement static obstacles
+const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => {
+  if (!map) return [];
+  try {
+    const features = map.queryRenderedFeatures({ layers: ['osm-buildings-3d'] });
+    if (!features || features.length === 0) return [];
+    const dynamicObs: Obstacle[] = [];
+    const seen = new Set<string>();
+
+    for (const f of features) {
+      const id = String(f.id || `osm-${Math.random()}`);
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      const height = Number(f.properties?.render_height) || 14.0;
+      let coords: [number, number][] = [];
+      if (f.geometry.type === 'Polygon') {
+        coords = f.geometry.coordinates[0] as [number, number][];
+      } else if (f.geometry.type === 'MultiPolygon') {
+        coords = f.geometry.coordinates[0]?.[0] as [number, number][];
+      }
+      if (coords && coords.length >= 3) {
+        const sumLng = coords.reduce((acc, c) => acc + c[0], 0);
+        const sumLat = coords.reduce((acc, c) => acc + c[1], 0);
+        const center: [number, number] = [sumLng / coords.length, sumLat / coords.length];
+
+        dynamicObs.push({
+          id: `osm-${id}`,
+          name: `3D Urban Structure (${Math.round(height)}m AGL)`,
+          type: 'building',
+          heightMeters: height,
+          physicalHeightMeters: height,
+          visualHeightMeters: height,
+          deckElevationMeters: height,
+          verticalClearanceBufferMeters: 15.0,
+          baseElevationMeters: 411.0,
+          roofElevationMeters: 411.0 + height,
+          center,
+          coordinates: coords,
+          heightConfidence: f.properties?.render_height ? 'verified' : 'estimated',
+          heightSource: 'OpenFreeMap 3D Vector Building Tiles',
+          color: '#0284c7',
+          safetyBufferMeters: 20.0,
+          description: `Extruded urban building structure from vector tiles (${Math.round(height)}m AGL)`
+        });
+      }
+    }
+    return dynamicObs;
+  } catch {
+    return [];
+  }
+};
+
   // Initialize MapLibre GL map
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
@@ -628,6 +681,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     });
 
     mapRef.current = map;
+    (window as any).__mapInstance = map;
+    (window as any).__getDynamicBuildingObstacles = () => getDynamicBuildingObstacles(mapRef.current);
 
     return () => {
       resizeObserver.disconnect();
@@ -645,6 +700,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       }
       map.remove();
       mapRef.current = null;
+      (window as any).__mapInstance = null;
+      (window as any).__getDynamicBuildingObstacles = null;
       setIsMapLoaded(false);
     };
   }, []);
@@ -1053,7 +1110,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             ['boolean', ['feature-state', 'conflict'], false], '#ef4444',
             ['get', 'color']
           ],
-          'fill-extrusion-height': ['coalesce', ['get', 'visual_height'], ['get', 'height'], 50.0],
+          'fill-extrusion-height': ['coalesce', ['get', 'physical_height'], ['get', 'height'], 35.0],
           'fill-extrusion-base': 0,
           'fill-extrusion-opacity': 0.96,
         },
@@ -1130,6 +1187,20 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           'line-color': ['get', 'color'],
           'line-width': ['coalesce', ['get', 'lineWidth'], 3.5],
           'line-opacity': ['coalesce', ['get', 'lineOpacity'], 0.95],
+        },
+      });
+
+      // 3D Aerial Flight Corridor Ribbon (True 3D Altitude Visualization above 3D Buildings)
+      map.addLayer({
+        id: 'flight-routes-3d-corridor',
+        type: 'fill-extrusion',
+        source: 'flight-routes',
+        filter: ['==', ['get', 'type'], 'corridor-3d'],
+        paint: {
+          'fill-extrusion-color': ['coalesce', ['get', 'color'], '#00f0ff'],
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], 67.0],
+          'fill-extrusion-base': ['coalesce', ['get', 'base'], 64.0],
+          'fill-extrusion-opacity': ['coalesce', ['get', 'corridorOpacity'], 0.75],
         },
       });
     }
@@ -1250,12 +1321,61 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       if (drone.route.length >= 2) {
         features.push({
           type: 'Feature',
-          properties: { color, type: 'planned', lineWidth, lineOpacity, isSelected },
+          properties: {
+            color,
+            type: 'planned',
+            lineWidth: isSelected ? (viewMode === '3d' ? 3.5 : 5.5) : 2.0,
+            lineOpacity: viewMode === '3d' ? (isSelected ? 0.50 : 0.20) : lineOpacity,
+            isSelected,
+          },
           geometry: {
             type: 'LineString',
             coordinates: drone.route.map((wp) => [wp.lng, wp.lat]),
           },
         });
+      }
+
+      // 2B. True 3D Flight Corridor Ribbon Extrusions (Rendered at exact waypoint altitude in 3D WebGL space)
+      if (drone.route.length >= 2) {
+        for (let s = 0; s < drone.route.length - 1; s++) {
+          const wpA = drone.route[s];
+          const wpB = drone.route[s + 1];
+          const altA = wpA.altitudeMeters || 65;
+          const altB = wpB.altitudeMeters || 65;
+          const avgAlt = (altA + altB) / 2;
+
+          const dx = (wpB.lng - wpA.lng) * Math.cos((wpA.lat * Math.PI) / 180);
+          const dy = wpB.lat - wpA.lat;
+          const len = Math.hypot(dx, dy);
+          if (len > 0.000001) {
+            const halfWidthDeg = 0.000045; // ~4.5 meters half-width aerial ribbon
+            const nx = (-dy / len) * halfWidthDeg;
+            const ny = (dx / len) * halfWidthDeg;
+
+            const polyCoords = [
+              [wpA.lng + nx, wpA.lat + ny],
+              [wpB.lng + nx, wpB.lat + ny],
+              [wpB.lng - nx, wpB.lat - ny],
+              [wpA.lng - nx, wpA.lat - ny],
+              [wpA.lng + nx, wpA.lat + ny],
+            ];
+
+            features.push({
+              type: 'Feature',
+              properties: {
+                type: 'corridor-3d',
+                color,
+                base: Math.max(0, avgAlt - 1.2),
+                height: avgAlt + 1.8,
+                corridorOpacity: isSelected ? 0.88 : 0.35,
+              },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [polyCoords],
+              },
+            });
+          }
+        }
       }
 
       // 2B. Alternative candidate routes (for selected drone, or all drones)
@@ -1410,7 +1530,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       map.setLayoutProperty('obstacles-2d-outline', 'visibility', layerObstacles ? 'visible' : 'none');
     }
     // 9. Planned Routes
-    ['flight-routes-planned', 'flight-routes-trail', 'flight-routes-original'].forEach((l) => {
+    ['flight-routes-planned', 'flight-routes-trail', 'flight-routes-original', 'flight-routes-3d-corridor'].forEach((l) => {
       if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', layerPlannedRoutes ? 'visible' : 'none');
     });
   }, [
