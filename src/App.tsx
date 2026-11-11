@@ -92,6 +92,7 @@ export function App() {
   const [selectedWaypointId, setSelectedWaypointId] = useState<string | null>(null);
   const [geofences, setGeofences] = useState<GeofenceZone[]>(INITIAL_GEOFENCES);
   const [officialAirspaceZones, setOfficialAirspaceZones] = useState<OfficialAirspaceZone[]>(OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
+  const [activeAirspaceSectorName, setActiveAirspaceSectorName] = useState<string>('Coimbatore Metropolitan Sector');
   const [obstacles, setObstacles] = useState<Obstacle[]>(COIMBATORE_OBSTACLES);
   const [alerts, setAlerts] = useState<AirspaceAlert[]>(INITIAL_ALERTS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
@@ -339,7 +340,17 @@ export function App() {
             },
             ...logs,
           ]);
-          return { ...d, isPaused: nextPaused };
+          return {
+            ...d,
+            isPaused: nextPaused,
+            status: nextPaused ? 'hovering' : 'active',
+            statusLabel: nextPaused ? 'Hold / Paused' : 'Ready for Autonomous Transit',
+            vitals: {
+              ...d.vitals,
+              altitudeMeters: !nextPaused && d.vitals.altitudeMeters < 25 ? (d.configuredCruiseAltitudeMeters || 65) : d.vitals.altitudeMeters,
+              groundSpeedKmh: nextPaused ? 0 : 48.0,
+            },
+          };
         }
         return d;
       })
@@ -354,6 +365,7 @@ export function App() {
         return {
           ...d,
           currentWaypointIndex: 0,
+          targetWaypointIndex: 1,
           status: 'active',
           statusLabel: 'Ready for Autonomous Transit',
           isPaused: false,
@@ -363,14 +375,14 @@ export function App() {
             ...d.vitals,
             latitude: startCoords[1],
             longitude: startCoords[0],
-            altitudeMeters: 0,
-            groundSpeedKmh: 0,
+            altitudeMeters: d.configuredCruiseAltitudeMeters || 65,
+            groundSpeedKmh: 48,
             headingDegrees: 0,
             batteryPercentage: 100,
           },
           route: d.route.map((wp, idx) => ({
             ...wp,
-            status: idx === 0 ? 'completed' : 'upcoming',
+            status: idx === 0 ? 'completed' : idx === 1 ? 'active' : 'upcoming',
           })),
         };
       })
@@ -486,6 +498,7 @@ export function App() {
           selectedCandidateId: cand.id,
           route: cand.waypoints,
           currentWaypointIndex: 0,
+          targetWaypointIndex: 1,
           totalFlightDistanceKm: cand.distanceKm,
           estimatedFlightMinutes: cand.simulatedMinutes,
         };
@@ -503,7 +516,7 @@ export function App() {
             name: 'CMCH Hub Alpha Emergency RTB Dock',
             lat: 11.0025,
             lng: 76.9665,
-            altitudeMeters: 0,
+            altitudeMeters: d.configuredCruiseAltitudeMeters || 65,
             type: 'base',
             status: 'upcoming',
             etaMinutes: 4,
@@ -539,6 +552,7 @@ export function App() {
               baseWaypoint,
             ],
             currentWaypointIndex: 0,
+          targetWaypointIndex: 1,
             isPaused: false,
           };
         }
@@ -692,6 +706,12 @@ export function App() {
                     onChangeSimSpeed={setSimulationSpeed}
                     onResetSim={handleResetSimulation}
                     onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
+                    onAirspaceQueryResult={(result) => {
+                      setOfficialAirspaceZones(result.zones);
+                      if (result.sectorName) {
+                        setActiveAirspaceSectorName(result.sectorName);
+                      }
+                    }}
                     checkpointMission={checkpointMission}
                     checkpointTelemetry={checkpointTelemetry}
                     isMapPickingDestination={isMapPickingDestination}
@@ -834,6 +854,7 @@ export function App() {
           <AirspaceView
             geofences={geofences}
             officialAirspaceZones={officialAirspaceZones}
+            sectorName={activeAirspaceSectorName}
             conflicts={conflicts}
             onImportAirspaceData={(imported) => setOfficialAirspaceZones(imported)}
             onSwitchToLive={() => {

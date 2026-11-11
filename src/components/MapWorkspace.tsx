@@ -29,7 +29,8 @@ import {
   ExternalLink,
   Shield,
   Crosshair,
-  Target
+  Target,
+  MapPin
 } from 'lucide-react';
 import { 
   Drone, 
@@ -45,6 +46,18 @@ import { AIRSPACE_CENTER } from '../data/mockFleet';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from '../data/officialAirspaceData';
 import { getDistanceMeters, formatWaypointDistance } from '../services/telemetryEngine';
+import { 
+  globalAirspaceManager, 
+  ALL_METRO_SECTORS, 
+  COIMBATORE_METRO_SECTOR, 
+  CHENNAI_METRO_SECTOR, 
+  BENGALURU_METRO_SECTOR,
+  DELHI_METRO_SECTOR,
+  MUMBAI_METRO_SECTOR,
+  MetroSector, 
+  AirspaceQueryResult, 
+  AirspaceViewport 
+} from '../services/airspace';
 
 interface MapWorkspaceProps {
   drones: Drone[];
@@ -65,6 +78,7 @@ interface MapWorkspaceProps {
   onChangeSimSpeed: (speed: number) => void;
   onResetSim: () => void;
   onImportAirspaceData?: (importedZones: OfficialAirspaceZone[]) => void;
+  onAirspaceQueryResult?: (result: AirspaceQueryResult) => void;
   checkpointMission?: Mission | null;
   checkpointTelemetry?: MissionTelemetry | null;
   onSelectCheckpoint?: (checkpoint: Checkpoint) => void;
@@ -135,23 +149,28 @@ const buildMarkerHtml = (
 
   return `
     <div style="
+      position: relative;
+      width: 80px;
+      height: 80px;
       display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: center;
+      pointer-events: auto;
       cursor: pointer;
       user-select: none;
-      transform: scale(${isSelected ? 1.22 : 1});
-      transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
-      position: relative;
     ">
       <!-- 1. CALLSIGN BILLBOARD BADGE (POSITIONED CLEANLY ABOVE DRONE) -->
       <div style="
+        position: absolute;
+        bottom: calc(100% + 4px);
+        left: 50%;
+        transform: translateX(-50%);
+        pointer-events: none;
+        z-index: 10;
+        white-space: nowrap;
         display: flex;
         flex-direction: column;
         align-items: center;
-        margin-bottom: 4px;
-        pointer-events: none;
-        z-index: 10;
       ">
         <div style="
           background: rgba(8, 12, 22, 0.94);
@@ -203,6 +222,8 @@ const buildMarkerHtml = (
         display: flex;
         align-items: center;
         justify-content: center;
+        transform: scale(${isSelected ? 1.22 : 1});
+        transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
       ">
         <!-- Selection Halo Ring -->
         ${isSelected ? `
@@ -392,51 +413,65 @@ const buildMarkerHtml = (
 
       <!-- 3. TELEMETRY CAPSULE STRIP UNDERNEATH DRONE -->
       <div style="
-        background: rgba(10, 15, 26, 0.94);
-        border: 1px solid ${hasThreat ? threatColor : '#25344f'};
-        border-radius: 4px;
-        padding: 2px 7px;
-        margin-top: 3px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        backdrop-filter: blur(8px);
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 50%;
+        transform: translateX(-50%);
         pointer-events: none;
         z-index: 10;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+        white-space: nowrap;
       ">
-        <span style="color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
-          ALT: ${alt}m
-        </span>
-        <div style="width: 1px; height: 8px; background: #23334d;"></div>
-        <span style="color: ${baseColor}; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
-          ${speed} km/h
-        </span>
-        <div style="width: 1px; height: 8px; background: #23334d;"></div>
-        <span style="color: ${batColor}; font-size: 10px; font-weight: 700; font-family: ui-monospace, monospace;">
-          ${bat}%
-        </span>
+        <div style="
+          background: rgba(10, 15, 26, 0.94);
+          border: 1px solid ${hasThreat ? threatColor : '#25344f'};
+          border-radius: 4px;
+          padding: 2px 7px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          backdrop-filter: blur(8px);
+          box-shadow: 0 2px 6px rgba(0,0,0,0.7);
+        ">
+          <span style="color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
+            ALT: ${alt}m
+          </span>
+          <div style="width: 1px; height: 8px; background: #23334d;"></div>
+          <span style="color: ${baseColor}; font-size: 10px; font-family: ui-monospace, monospace; font-weight: 600;">
+            ${speed} km/h
+          </span>
+          <div style="width: 1px; height: 8px; background: #23334d;"></div>
+          <span style="color: ${batColor}; font-size: 10px; font-weight: 700; font-family: ui-monospace, monospace;">
+            ${bat}%
+          </span>
+        </div>
       </div>
 
       <!-- 4. ACTIVE THREAT BANNER -->
       ${hasThreat ? `
         <div style="
-          margin-top: 3px;
-          background: rgba(220, 38, 38, 0.95);
-          color: #ffffff;
-          font-family: ui-monospace, monospace;
-          font-size: 9px;
-          font-weight: 800;
-          padding: 2px 6px;
-          border-radius: 3px;
-          letter-spacing: 0.04em;
-          text-transform: uppercase;
-          border: 1px solid #f87171;
-          box-shadow: 0 0 10px rgba(239, 68, 68, 0.85);
+          position: absolute;
+          top: calc(100% + 28px);
+          left: 50%;
+          transform: translateX(-50%);
           pointer-events: none;
           z-index: 10;
+          white-space: nowrap;
         ">
-          ${drone.isRerouting ? 'A* REROUTE ACTIVE' : activeConflict ? `COLLISION RISK: ${activeConflict.obstacleName.substring(0, 14)} (${activeConflict.horizontalDistanceMeters}m)` : `${drone.airspaceStatus}: AIRSPACE HAZARD`}
+          <div style="
+            background: rgba(220, 38, 38, 0.95);
+            color: #ffffff;
+            font-family: ui-monospace, monospace;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 3px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border: 1px solid #f87171;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.85);
+          ">
+            ${drone.isRerouting ? 'A* REROUTE ACTIVE' : activeConflict ? `COLLISION RISK: ${activeConflict.obstacleName.substring(0, 14)} (${activeConflict.horizontalDistanceMeters}m)` : `${drone.airspaceStatus}: AIRSPACE HAZARD`}
+          </div>
         </div>
       ` : ''}
     </div>
@@ -448,7 +483,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   selectedDroneId,
   onSelectDrone,
   geofences,
-  officialAirspaceZones = OFFICIAL_COIMBATORE_AIRSPACE_ZONES,
+  officialAirspaceZones,
   obstacles,
   obstacleConflicts,
   viewMode,
@@ -462,6 +497,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   onChangeSimSpeed,
   onResetSim,
   onImportAirspaceData,
+  onAirspaceQueryResult,
   checkpointMission,
   checkpointTelemetry,
   onSelectCheckpoint,
@@ -507,6 +543,11 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   // Airspace Zone Inspection & Legend state (Requirement 1 & 2)
   const [selectedAirspaceZone, setSelectedAirspaceZone] = useState<OfficialAirspaceZone | null>(null);
   const [showAirspaceLegend, setShowAirspaceLegend] = useState(true);
+
+  // Dynamic Nationwide Airspace state
+  const [airspaceQueryResult, setAirspaceQueryResult] = useState<AirspaceQueryResult | null>(null);
+  const [currentCenter, setCurrentCenter] = useState<[number, number]>([76.9780, 11.0160]);
+  const [activeSectorId, setActiveSectorId] = useState<string>('coimbatore');
 
 // Query dynamic OSM vector building features to supplement static obstacles
 const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => {
@@ -652,6 +693,62 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       resizeObserver.observe(mapContainerRef.current);
     }
 
+    const updateAirspaceForViewport = () => {
+      const bounds = map.getBounds();
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      setCurrentCenter([center.lng, center.lat]);
+
+      const vp: AirspaceViewport = {
+        minLng: bounds.getWest(),
+        minLat: bounds.getSouth(),
+        maxLng: bounds.getEast(),
+        maxLat: bounds.getNorth(),
+        center: [center.lng, center.lat],
+        zoom,
+      };
+
+      globalAirspaceManager.queryAirspace(vp, (result) => {
+        setAirspaceQueryResult(result);
+        if (result.sectorId) {
+          setActiveSectorId(result.sectorId);
+        } else if (result.coverageStatus === 'UNVERIFIED_COVERAGE') {
+          setActiveSectorId('unverified');
+        }
+
+        const src = map.getSource('official-airspace-source') as maplibregl.GeoJSONSource;
+        if (src) {
+          const features = result.zones.map((z) => ({
+            type: 'Feature' as const,
+            id: z.id,
+            properties: {
+              id: z.id,
+              name: z.name,
+              classification: z.classification,
+              lowerLimit: z.lowerAltitudeLimitMeters,
+              upperLimit: z.upperAltitudeLimitMeters,
+              altitudeRef: z.altitudeReference,
+              terrainElev: z.terrainElevationMeters,
+              permissionRequired: z.permissionRequired,
+              authority: z.permissionAuthority,
+              source: z.authoritativeSource,
+              status: z.status,
+              description: z.description,
+            },
+            geometry: {
+              type: 'Polygon' as const,
+              coordinates: [z.coordinates],
+            },
+          }));
+          src.setData({ type: 'FeatureCollection', features });
+        }
+
+        if (onAirspaceQueryResult) {
+          onAirspaceQueryResult(result);
+        }
+      });
+    };
+
     map.on('load', () => {
       (window as any).__map = map;
       initMapLayers(map);
@@ -666,6 +763,16 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       } catch {}
 
       setIsMapLoaded(true);
+      updateAirspaceForViewport();
+    });
+
+    map.on('move', () => {
+      const center = map.getCenter();
+      setCurrentCenter([center.lng, center.lat]);
+    });
+
+    map.on('moveend', () => {
+      updateAirspaceForViewport();
     });
 
     map.on('pitch', () => {
@@ -781,7 +888,9 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
   // Initialize all vector layers
   const initMapLayers = (map: maplibregl.Map) => {
     // ─── 1. Official DGCA Digital Sky Airspace Source & Layers (Req 1 & 2) ───
-    const activeZones = officialAirspaceZones || OFFICIAL_COIMBATORE_AIRSPACE_ZONES;
+    const activeZones = officialAirspaceZones !== undefined 
+      ? officialAirspaceZones 
+      : (airspaceQueryResult ? airspaceQueryResult.zones : OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
     const zoneFeatures = activeZones.map((z) => ({
       type: 'Feature' as const,
       id: z.id,
@@ -870,27 +979,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         },
       });
 
-      // 3D Volumetric Airspace Envelope
-      map.addLayer({
-        id: 'airspace-zones-3d-volume',
-        type: 'fill-extrusion',
-        source: 'official-airspace-source',
-        paint: {
-          'fill-extrusion-color': [
-            'match',
-            ['get', 'classification'],
-            'RED', '#EF4444',
-            'YELLOW', '#FACC15',
-            'GREEN', '#22C55E',
-            '#94A3B8'
-          ],
-          'fill-extrusion-height': ['get', 'upperLimit'],
-          'fill-extrusion-base': ['get', 'lowerLimit'],
-          'fill-extrusion-opacity': 0.08,
-        },
-      });
-
-      // Click to inspect zone
+      // Click to inspect zone (registered on ground fill)
       map.on('click', 'airspace-zones-fill', (e) => {
         if (e.features && e.features[0]) {
           const feat = e.features[0];
@@ -986,7 +1075,12 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       }
     }
 
-    // ─── 3. OpenFreeMap 3D Real Extruded Buildings (Actual Heights) ───
+    // ─── 3. OpenFreeMap 3D Real Extruded Buildings (Actual Building Footprints Only) ───
+    // Requirement:
+    // - Only actual individual buildings are extruded; minzoom 14.0 ensures generalized low-zoom blocks are omitted.
+    // - Feature filter excludes non-building shapes and hide_3d tags.
+    // - Realistic heights: clamped between 3.2m (1 floor) and 150.0m (urban high-rise limit).
+    // - Modest default height 6.4m (~2 storeys) for verified building footprints without explicit height tags.
     try {
       if (!map.getLayer('osm-buildings-3d') && map.getSource(vectorSourceId)) {
         map.addLayer({
@@ -994,37 +1088,63 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           type: 'fill-extrusion',
           source: vectorSourceId,
           'source-layer': 'building',
-          minzoom: 12.0,
-          filter: ['!=', ['get', 'hide_3d'], true],
+          minzoom: 14.0,
+          filter: [
+            'all',
+            ['!=', ['get', 'hide_3d'], true],
+            ['any',
+              ['has', 'render_height'],
+              ['has', 'height'],
+              ['has', 'levels'],
+              ['has', 'building:levels'],
+              ['==', ['get', 'building'], 'yes'],
+              ['has', 'building']
+            ]
+          ],
           paint: {
-            // Tactical aerospace height color gradient
             'fill-extrusion-color': [
               'interpolate',
               ['linear'],
-              ['coalesce', ['get', 'render_height'], 14],
+              ['min', 120, ['coalesce', ['get', 'render_height'], ['get', 'height'], 6.4]],
               0, '#0f172a',
-              12, '#0369a1',
-              25, '#0284c7',
-              45, '#0ea5e9',
-              70, '#38bdf8',
-              100, '#00f0ff'
+              6, '#0284c7',
+              15, '#0ea5e9',
+              35, '#38bdf8',
+              60, '#67e8f9',
+              100, '#a5f3fc'
             ],
             // Use actual mapped heights from OpenFreeMap vector tiles (render_height in meters).
-            // Reasonable fallback of 14m (~4 storeys) only when height is missing.
+            // Checked against render_height, height, and levels (3.2m/floor), clamped to realistic urban limits [3.2m - 150m].
             'fill-extrusion-height': [
-              'case',
-              ['has', 'render_height'],
-              ['max', 3.5, ['get', 'render_height']],
-              14.0
+              'min',
+              150.0,
+              [
+                'max',
+                3.2,
+                [
+                  'case',
+                  ['has', 'render_height'],
+                  ['to-number', ['get', 'render_height'], 6.4],
+                  ['has', 'height'],
+                  ['to-number', ['get', 'height'], 6.4],
+                  ['has', 'levels'],
+                  ['*', ['to-number', ['get', 'levels'], 2], 3.2],
+                  ['has', 'building:levels'],
+                  ['*', ['to-number', ['get', 'building:levels'], 2], 3.2],
+                  6.4
+                ]
+              ]
             ],
-            // Base altitude offset for cantilevered and rooftop structures
+            // Base altitude offset for rooftop and multi-level structures (must be non-negative)
             'fill-extrusion-base': [
               'case',
               ['has', 'render_min_height'],
-              ['get', 'render_min_height'],
+              ['max', 0, ['to-number', ['get', 'render_min_height'], 0]],
+              ['has', 'min_height'],
+              ['max', 0, ['to-number', ['get', 'min_height'], 0]],
               0
             ],
-            'fill-extrusion-opacity': 0.88,
+            'fill-extrusion-opacity': 0.85,
           },
         });
       }
@@ -1043,8 +1163,8 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
           id: obs.id,
           name: obs.name,
           type: obs.type,
-          height: obs.heightMeters,
-          visual_height: obs.visualHeightMeters ?? obs.heightMeters,
+          height: obs.physicalHeightMeters ?? obs.heightMeters,
+          visual_height: obs.physicalHeightMeters ?? obs.heightMeters,
           physical_height: obs.physicalHeightMeters ?? obs.heightMeters,
           deck_elevation: obs.deckElevationMeters ?? obs.heightMeters,
           deck_thickness: obs.deckThicknessMeters ?? 3.5,
@@ -1066,39 +1186,37 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         },
       });
 
-      // 4A. Elevated Highway Viaduct Piers (Structural Concrete)
+      // 4A. Elevated Highway Viaduct Corridor Casing (2D ground overlay, not 3D extrusion)
       map.addLayer({
         id: '3d-highways-piers',
-        type: 'fill-extrusion',
+        type: 'line',
         source: 'coimbatore-obstacles',
         filter: ['==', ['get', 'type'], 'highway_flyover'],
         paint: {
-          'fill-extrusion-color': '#334155',
-          'fill-extrusion-height': ['coalesce', ['get', 'deck_elevation'], ['get', 'height'], 18.0],
-          'fill-extrusion-base': 0,
-          'fill-extrusion-opacity': 0.92,
+          'line-color': '#0f172a',
+          'line-width': 4.5,
+          'line-opacity': 0.75,
         },
       });
 
-      // 4B. Elevated Highway Viaduct Deck (Steel-blue / Cyan Ribbon)
+      // 4B. Elevated Highway Viaduct Corridor Deck Ribbon (2D ground overlay)
       map.addLayer({
         id: '3d-highways-deck',
-        type: 'fill-extrusion',
+        type: 'line',
         source: 'coimbatore-obstacles',
         filter: ['==', ['get', 'type'], 'highway_flyover'],
         paint: {
-          'fill-extrusion-color': [
+          'line-color': [
             'case',
             ['boolean', ['feature-state', 'conflict'], false], '#ef4444',
-            '#7DD3FC'
+            '#38bdf8'
           ],
-          'fill-extrusion-height': ['+', ['coalesce', ['get', 'deck_elevation'], ['get', 'height'], 18.0], ['coalesce', ['get', 'deck_thickness'], 3.5]],
-          'fill-extrusion-base': ['coalesce', ['get', 'deck_elevation'], ['get', 'height'], 18.0],
-          'fill-extrusion-opacity': 0.98,
+          'line-width': 2.8,
+          'line-opacity': 0.92,
         },
       });
 
-      // 4C. Prominent 3D Buildings Extrusion
+      // 4C. Prominent 3D Buildings Extrusion (Verified Physical Heights, Capped Realistically)
       map.addLayer({
         id: '3d-obstacles-extrusion',
         type: 'fill-extrusion',
@@ -1110,9 +1228,13 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             ['boolean', ['feature-state', 'conflict'], false], '#ef4444',
             ['get', 'color']
           ],
-          'fill-extrusion-height': ['coalesce', ['get', 'physical_height'], ['get', 'height'], 35.0],
+          'fill-extrusion-height': [
+            'min',
+            80.0,
+            ['max', 6.0, ['coalesce', ['get', 'physical_height'], ['get', 'height'], 24.0]]
+          ],
           'fill-extrusion-base': 0,
-          'fill-extrusion-opacity': 0.96,
+          'fill-extrusion-opacity': 0.92,
         },
       });
 
@@ -1261,7 +1383,9 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
     const src = map.getSource('official-airspace-source') as maplibregl.GeoJSONSource;
     if (!src) return;
 
-    const activeZones = officialAirspaceZones || OFFICIAL_COIMBATORE_AIRSPACE_ZONES;
+    const activeZones = officialAirspaceZones !== undefined 
+      ? officialAirspaceZones 
+      : (airspaceQueryResult ? airspaceQueryResult.zones : OFFICIAL_COIMBATORE_AIRSPACE_ZONES);
     const features = activeZones.map((z) => ({
       type: 'Feature' as const,
       id: z.id,
@@ -1469,6 +1593,11 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       if (!marker) {
         const el = document.createElement('div');
         el.className = 'drone-marker-container';
+        el.style.width = '80px';
+        el.style.height = '80px';
+        el.style.position = 'absolute';
+        el.style.pointerEvents = 'auto';
+        el.style.cursor = 'pointer';
         el.innerHTML = buildMarkerHtml(drone, isSelected, activeConflict, themeColor);
 
         el.addEventListener('click', (e) => {
@@ -1479,6 +1608,8 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         marker = new maplibregl.Marker({
           element: el,
           anchor: 'center',
+          pitchAlignment: 'viewport',
+          rotationAlignment: 'viewport',
         })
           .setLngLat([drone.vitals.longitude, drone.vitals.latitude])
           .addTo(map);
@@ -1522,7 +1653,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', layerFlyovers ? 'visible' : 'none');
     });
     // 7. Airspace Zones
-    ['airspace-zones-fill', 'airspace-zones-outline', 'airspace-zones-3d-volume'].forEach((l) => {
+    ['airspace-zones-fill', 'airspace-zones-outline'].forEach((l) => {
       if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', layerAirspaceZones ? 'visible' : 'none');
     });
     // 8. Obstacles 2D
@@ -1595,7 +1726,6 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         el.innerHTML = `
           <div style="
             position: relative;
-            transform: translate(-50%, -50%);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1623,7 +1753,6 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         el.innerHTML = `
           <div style="
             position: relative;
-            transform: translate(-50%, -50%);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -1736,7 +1865,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
         }
 
         el.innerHTML = `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
+          <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
             ${pulseRing}
             <div style="
               position: relative;
@@ -1857,7 +1986,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       const eta = drone.etaSecondsRemaining !== undefined ? `${Math.ceil(drone.etaSecondsRemaining / 60)}m` : '';
 
       const markerHtml = `
-        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; transform: translate(-50%, -100%); position: relative;">
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: auto; cursor: pointer; position: relative;">
           ${isSelected ? `
             <div style="
               position: absolute;
@@ -1990,7 +2119,7 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       const el = document.createElement('div');
       el.className = 'temp-destination-pin';
       el.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none; transform: translate(-50%, -100%); position: relative;">
+        <div style="display: flex; flex-direction: column; align-items: center; pointer-events: none; position: relative;">
           <div style="
             position: absolute;
             bottom: 0;
@@ -2255,6 +2384,34 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       duration: 1000,
     });
   };
+  const handleJumpToCity = (sector: MetroSector | 'unverified') => {
+    const map = mapRef.current;
+    if (!map) return;
+    setAutoFollow(false);
+
+    if (sector === 'unverified') {
+      map.flyTo({
+        center: [78.5500, 21.0500],
+        zoom: 12.0,
+        pitch: 45,
+        bearing: -15,
+        duration: 2000,
+        essential: true,
+      });
+      setActiveSectorId('unverified');
+      return;
+    }
+
+    map.flyTo({
+      center: sector.center,
+      zoom: sector.defaultZoom,
+      pitch: viewMode === '3d' ? 58 : 0,
+      bearing: viewMode === '3d' ? -20 : 0,
+      duration: 2000,
+      essential: true,
+    });
+    setActiveSectorId(sector.id);
+  };
   const handleNadir2D = () => {
     setViewMode('2d');
     mapRef.current?.easeTo({ pitch: 0, bearing: 0, duration: 600 });
@@ -2273,16 +2430,36 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
       <div className="absolute top-3 left-3 z-10 flex flex-col gap-2 pointer-events-none">
         <div className="flex items-center gap-2">
           <div className="bg-[#0b101d]/90 backdrop-blur-md border border-[#1f2a40] px-3 py-1.5 rounded-md flex items-center gap-2.5 shadow-lg">
-            <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></div>
+            <div className={`w-2.5 h-2.5 rounded-full ${
+              airspaceQueryResult?.coverageStatus === 'UNVERIFIED_COVERAGE' 
+                ? 'bg-amber-400 animate-ping' 
+                : airspaceQueryResult?.coverageStatus === 'MAPPLS_LIVE'
+                ? 'bg-emerald-400 animate-pulse'
+                : 'bg-cyan-400 animate-pulse'
+            }`}></div>
             <div>
               <div className="text-xs font-mono font-bold text-white tracking-wider uppercase flex items-center gap-1.5">
-                <span>COIMBATORE UTM AIRSPACE</span>
-                <span className="text-[10px] text-cyan-300 font-normal px-1 py-0.2 bg-cyan-950/80 border border-cyan-800 rounded">
-                  DGCA DIGITAL SKY
-                </span>
+                <span>{airspaceQueryResult?.sectorName || 'DGCA UTM AIRSPACE'}</span>
+                {airspaceQueryResult?.coverageStatus === 'UNVERIFIED_COVERAGE' ? (
+                  <span className="text-[10px] text-amber-300 font-semibold px-1 py-0.2 bg-amber-950/80 border border-amber-700 rounded">
+                    UNVERIFIED
+                  </span>
+                ) : airspaceQueryResult?.coverageStatus === 'MAPPLS_LIVE' ? (
+                  <span className="text-[10px] text-emerald-300 font-semibold px-1 py-0.2 bg-emerald-950/80 border border-emerald-700 rounded">
+                    MAPPLS LIVE
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-cyan-300 font-normal px-1 py-0.2 bg-cyan-950/80 border border-cyan-800 rounded">
+                    DGCA STATUTORY
+                  </span>
+                )}
               </div>
               <div className="text-[10px] font-mono text-cyan-400/90">
-                11.0168° N, 76.9558° E • TAMIL NADU
+                {currentCenter[1].toFixed(4)}° N, {currentCenter[0].toFixed(4)}° E • {
+                  airspaceQueryResult?.coverageStatus === 'UNVERIFIED_COVERAGE'
+                    ? 'UNMAPPED / ADVISORY RESTRICTED'
+                    : (airspaceQueryResult?.zones?.length || 0) + ' ACTIVE ZONES'
+                }
               </div>
             </div>
           </div>
@@ -2309,10 +2486,96 @@ const getDynamicBuildingObstacles = (map: maplibregl.Map | null): Obstacle[] => 
             </button>
           </div>
         )}
+
+        {/* ─── UNVERIFIED COVERAGE WARNING BANNER ─── */}
+        {airspaceQueryResult?.coverageStatus === 'UNVERIFIED_COVERAGE' && (
+          <div className="pointer-events-auto max-w-lg bg-amber-950/95 backdrop-blur-md border border-amber-500/80 rounded-md p-2.5 shadow-2xl text-amber-200">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 animate-pulse" />
+              <div className="flex-1">
+                <div className="text-[11px] font-bold text-amber-300 flex items-center justify-between">
+                  <span>UNVERIFIED AIRSPACE COVERAGE</span>
+                  <span className="text-[9px] bg-amber-900/80 px-1 py-0.2 rounded border border-amber-600/70 text-amber-200">
+                    STATUTORY ADVISORY
+                  </span>
+                </div>
+                <p className="text-[10px] text-amber-200/90 leading-tight mt-1">
+                  Authoritative DGCA DigitalSky data not available for this visible area. Operations outside verified sectors require prior DigitalSky filing. Do not assume unrestricted green airspace.
+                </p>
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[9px] text-amber-400 font-semibold">Jump to Verified Hub:</span>
+                  <button
+                    onClick={() => handleJumpToCity(COIMBATORE_METRO_SECTOR)}
+                    className="px-1.5 py-0.5 bg-amber-900/80 hover:bg-amber-800 text-[9px] text-amber-100 font-bold rounded border border-amber-600/60"
+                  >
+                    CJB
+                  </button>
+                  <button
+                    onClick={() => handleJumpToCity(CHENNAI_METRO_SECTOR)}
+                    className="px-1.5 py-0.5 bg-amber-900/80 hover:bg-amber-800 text-[9px] text-amber-100 font-bold rounded border border-amber-600/60"
+                  >
+                    MAA
+                  </button>
+                  <button
+                    onClick={() => handleJumpToCity(BENGALURU_METRO_SECTOR)}
+                    className="px-1.5 py-0.5 bg-amber-900/80 hover:bg-amber-800 text-[9px] text-amber-100 font-bold rounded border border-amber-600/60"
+                  >
+                    BLR
+                  </button>
+                  <button
+                    onClick={() => handleJumpToCity(DELHI_METRO_SECTOR)}
+                    className="px-1.5 py-0.5 bg-amber-900/80 hover:bg-amber-800 text-[9px] text-amber-100 font-bold rounded border border-amber-600/60"
+                  >
+                    DEL
+                  </button>
+                  <button
+                    onClick={() => handleJumpToCity(MUMBAI_METRO_SECTOR)}
+                    className="px-1.5 py-0.5 bg-amber-900/80 hover:bg-amber-800 text-[9px] text-amber-100 font-bold rounded border border-amber-600/60"
+                  >
+                    BOM
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── TOP RIGHT: COMPACT PROFESSIONAL MAP DOCK (Priority 3) ─── */}
       <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-1.5 pointer-events-none select-none">
+        {/* Quick-Jump Nationwide Sector Bar */}
+        <div className="bg-[#0b101d]/90 backdrop-blur-md border border-[#1f2a40] p-1 rounded-md flex items-center gap-1 shadow-xl pointer-events-auto">
+          <span className="text-[10px] text-slate-400 font-bold px-1.5 flex items-center gap-1">
+            <MapPin className="w-3 h-3 text-cyan-400" />
+            <span>SECTOR:</span>
+          </span>
+          {ALL_METRO_SECTORS.map((sector) => (
+            <button
+              key={sector.id}
+              onClick={() => handleJumpToCity(sector)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                activeSectorId === sector.id
+                  ? 'bg-cyan-500 text-slate-950 font-extrabold shadow-[0_0_8px_rgba(6,182,212,0.6)]'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+              }`}
+              title={`Fly camera to ${sector.name} (${sector.primaryAirportIcao})`}
+            >
+              {sector.shortCode}
+            </button>
+          ))}
+          <div className="w-[1px] h-3.5 bg-[#1f2a40] mx-0.5" />
+          <button
+            onClick={() => handleJumpToCity('unverified')}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+              activeSectorId === 'unverified'
+                ? 'bg-amber-500 text-slate-950 font-extrabold shadow-[0_0_8px_rgba(245,158,11,0.6)]'
+                : 'text-amber-400/80 hover:text-amber-300 hover:bg-amber-950/50'
+            }`}
+            title="Fly camera to Unmapped Area (Demonstrates UNVERIFIED_COVERAGE handling)"
+          >
+            UNMAPPED
+          </button>
+        </div>
         {/* Compact Dock Strip */}
         <div className="bg-[#0b101d]/90 backdrop-blur-md border border-[#1f2a40] p-1 rounded-md flex items-center gap-1 shadow-xl pointer-events-auto">
           {/* 2D / 3D Toggle */}
