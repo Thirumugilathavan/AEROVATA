@@ -58,6 +58,10 @@ import {
   AirspaceQueryResult, 
   AirspaceViewport 
 } from '../services/airspace';
+import { NextWaypointCard } from './NextWaypointCard';
+import { GeofenceWarningBanner } from './GeofenceWarningBanner';
+import { AltitudeProfileStrip } from './AltitudeProfileStrip';
+import { DESIGN_TOKENS } from '../styles/designTokens';
 
 interface MapWorkspaceProps {
   drones: Drone[];
@@ -85,6 +89,7 @@ interface MapWorkspaceProps {
   isMapPickingDestination?: boolean;
   onMapPickDestination?: (coords: [number, number]) => void;
   tempDestinationCoords?: [number, number] | null;
+  isSimulationMode?: boolean;
 }
 
 const DRONE_THEME_COLORS: Record<string, string> = {
@@ -504,6 +509,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   isMapPickingDestination = false,
   onMapPickDestination,
   tempDestinationCoords,
+  isSimulationMode = true,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -534,15 +540,16 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const [mapStyle, setMapStyle] = useState<'satellite' | 'dark'>('satellite');
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [autoFollow, setAutoFollow] = useState(false);
+  const [showMiniMap, setShowMiniMap] = useState(false);
 
   // Advanced Camera state (Requirement 5)
   const [currentPitch, setCurrentPitch] = useState(62);
   const [currentBearing, setCurrentBearing] = useState(-25);
   const [showCameraToolbar, setShowCameraToolbar] = useState(false);
 
-  // Airspace Zone Inspection & Legend state (Requirement 1 & 2)
+  // Airspace Zone Inspection & Legend state (Requirement 1 & 2 - Collapsed chip by default per Req 6)
   const [selectedAirspaceZone, setSelectedAirspaceZone] = useState<OfficialAirspaceZone | null>(null);
-  const [showAirspaceLegend, setShowAirspaceLegend] = useState(true);
+  const [showAirspaceLegend, setShowAirspaceLegend] = useState(false);
 
   // Dynamic Nationwide Airspace state
   const [airspaceQueryResult, setAirspaceQueryResult] = useState<AirspaceQueryResult | null>(null);
@@ -883,10 +890,10 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           'fill-opacity': [
             'match',
             ['get', 'classification'],
-            'RED', 0.24,
-            'YELLOW', 0.20,
+            'RED', 0.20,
+            'YELLOW', 0.16,
             'GREEN', 0.12,
-            0.15
+            0.14
           ],
         },
       });
@@ -908,17 +915,52 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           'line-width': [
             'match',
             ['get', 'classification'],
-            'RED', 2.8,
+            'RED', 2.6,
             'YELLOW', 2.4,
             'GREEN', 2.0,
             1.8
           ],
           'line-dasharray': [
             'case',
-            ['==', ['get', 'classification'], 'YELLOW'], ['literal', [3, 1]],
-            ['==', ['get', 'classification'], 'UNKNOWN'], ['literal', [4, 2]],
+            ['==', ['get', 'classification'], 'YELLOW'], ['literal', [4, 2]],
+            ['==', ['get', 'classification'], 'UNKNOWN'], ['literal', [4, 3]],
             ['literal', [1, 0]]
           ],
+        },
+      });
+
+      // Airspace Zone Text Labels inside zones (Requirement 6: text label inside zone)
+      map.addLayer({
+        id: 'airspace-zones-labels',
+        type: 'symbol',
+        source: 'official-airspace-source',
+        layout: {
+          'text-field': [
+            'concat',
+            ['get', 'classification'], ' ZONE · ',
+            ['case',
+              ['==', ['get', 'classification'], 'RED'], 'NO-FLY',
+              ['==', ['get', 'classification'], 'YELLOW'], 'ATC AUTH REQ',
+              ['==', ['get', 'classification'], 'GREEN'], 'PERMITTED <400FT',
+              'ADVISORY'
+            ]
+          ],
+          'text-size': 11,
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-anchor': 'center',
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': [
+            'match',
+            ['get', 'classification'],
+            'RED', '#fca5a5',
+            'YELLOW', '#fef08a',
+            'GREEN', '#86efac',
+            '#cbd5e1'
+          ],
+          'text-halo-color': '#020617',
+          'text-halo-width': 2.0,
         },
       });
 
@@ -1420,7 +1462,32 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       type: 'FeatureCollection',
       features,
     });
-  }, [drones, selectedDroneId, isMapLoaded]);
+
+    // Fade obstacles within 40m of active route (Requirement 1: fade buildings near route)
+    const activeDrone = drones.find((d) => d.id === selectedDroneId) || drones[0];
+    if (activeDrone && activeDrone.route && activeDrone.route.length >= 2) {
+      const allObstacles = [
+        ...COIMBATORE_DETAILED_OBSTACLES,
+        ...obstacles.filter((o) => !COIMBATORE_DETAILED_OBSTACLES.some((c) => c.id === o.id)),
+      ];
+      allObstacles.forEach((obs: Obstacle) => {
+        let isNear = false;
+        for (const wp of activeDrone.route) {
+          const d = getDistanceMeters(wp.lat, wp.lng, obs.center[1], obs.center[0]);
+          if (d < 50) {
+            isNear = true;
+            break;
+          }
+        }
+        try {
+          map.setFeatureState(
+            { source: 'coimbatore-obstacles', id: obs.id },
+            { nearRoute: isNear }
+          );
+        } catch (_) {}
+      });
+    }
+  }, [drones, selectedDroneId, isMapLoaded, obstacles]);
 
   // Update Proposed Replan Route
   useEffect(() => {
@@ -2302,9 +2369,20 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full overflow-hidden select-none bg-[#080b12]">
+    <div className={`relative w-full h-full overflow-hidden select-none bg-[#080b12] ${
+      isSimulationMode 
+        ? 'ring-2 ring-inset ring-amber-500/40 shadow-[inset_0_0_24px_rgba(245,158,11,0.06)]' 
+        : ''
+    }`}>
       {/* MapLibre WebGL Canvas Container */}
       <div ref={mapContainerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+
+      {/* ─── TOP CENTER: GEOFENCE & RESTRICTED AIRSPACE WARNING BANNER (Requirement 6) ─── */}
+      <GeofenceWarningBanner
+        selectedDrone={drones.find((d) => d.id === selectedDroneId) || drones[0] || null}
+        officialAirspaceZones={officialAirspaceZones || OFFICIAL_COIMBATORE_AIRSPACE_ZONES}
+        obstacleConflicts={obstacleConflicts}
+      />
 
       {/* ─── TOP LEFT: AIRSPACE IDENTIFIER & DATA FRESHNESS ─── */}
       <div className="absolute top-3 left-3 z-10 flex flex-col gap-2 pointer-events-none">
@@ -2343,14 +2421,6 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
               </div>
             </div>
           </div>
-
-          <div className="bg-[#0b101d]/90 backdrop-blur-md border border-[#1f2a40] px-2.5 py-1.5 rounded-md flex items-center gap-1.5 text-xs font-mono font-bold">
-            <span className="text-slate-400">PITCH:</span>
-            <span className="text-cyan-300">{currentPitch}°</span>
-            <span className="text-slate-500">|</span>
-            <span className="text-slate-400">HDG:</span>
-            <span className="text-cyan-300">{currentBearing >= 0 ? currentBearing : 360 + currentBearing}°</span>
-          </div>
         </div>
 
         {/* Following Drone active status pill */}
@@ -2366,6 +2436,14 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             </button>
           </div>
         )}
+
+        {/* Next Waypoint Card (Requirement 8) */}
+        <div className="pointer-events-auto">
+          <NextWaypointCard
+            selectedDrone={drones.find((d) => d.id === selectedDroneId) || drones[0] || null}
+            onSelectWaypoint={onSelectWaypoint}
+          />
+        </div>
 
         {/* ─── UNVERIFIED COVERAGE WARNING BANNER ─── */}
         {airspaceQueryResult?.coverageStatus === 'UNVERIFIED_COVERAGE' && (
@@ -2509,13 +2587,25 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
           <div className="w-[1px] h-4 bg-[#1f2a40] mx-0.5" />
 
-          {/* Reset North */}
+          {/* Rotating Compass Widget (HDG readout, resets North on click - Requirement 2) */}
           <button
             onClick={handleResetNorth}
-            className="w-6 h-6 flex items-center justify-center rounded text-slate-300 hover:text-cyan-300 hover:bg-slate-800/80 transition-colors"
-            title="Reset North Orientation"
+            className="relative w-8 h-8 flex flex-col items-center justify-center rounded bg-[#070b14] border border-[#1b263b] text-cyan-300 hover:text-white hover:border-cyan-400 transition-all group"
+            title={`Heading: ${currentBearing >= 0 ? Math.round(currentBearing) : Math.round(360 + currentBearing)}° • Click to Reset North`}
+            aria-label="Compass - Reset North"
           >
-            <Compass className="w-3.5 h-3.5" />
+            <div 
+              className="w-4 h-4 flex items-center justify-center transition-transform duration-200"
+              style={{ transform: `rotate(${-currentBearing}deg)` }}
+            >
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none">
+                <polygon points="12,2 16,12 12,9 8,12" fill="#ef4444" />
+                <polygon points="12,22 16,12 12,9 8,12" fill="#94a3b8" />
+              </svg>
+            </div>
+            <span className="text-[8px] font-mono font-bold leading-none text-slate-400 group-hover:text-cyan-300">
+              {currentBearing >= 0 ? Math.round(currentBearing) : Math.round(360 + currentBearing)}°
+            </span>
           </button>
 
           {/* Recenter Coimbatore */}
@@ -2547,6 +2637,22 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             title={autoFollow ? 'Following Selected Drone (Click to Disengage)' : 'Follow Selected Drone'}
           >
             <Navigation className={`w-3.5 h-3.5 ${autoFollow ? 'animate-pulse text-cyan-300' : ''}`} />
+          </button>
+
+          <div className="w-[1px] h-4 bg-[#1f2a40] mx-0.5" />
+
+          {/* Mini-Map Toggle (Requirement 8) */}
+          <button
+            onClick={() => setShowMiniMap(!showMiniMap)}
+            className={`w-6 h-6 flex items-center justify-center rounded transition-all ${
+              showMiniMap
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.5)]'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+            }`}
+            title="Toggle Situational Overview Mini-Map"
+            aria-label="Toggle Mini-Map"
+          >
+            <MapIcon className="w-3.5 h-3.5" />
           </button>
 
           <div className="w-[1px] h-4 bg-[#1f2a40] mx-0.5" />
@@ -2780,9 +2886,23 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           )}
       </div>
 
-      {/* ─── BOTTOM LEFT: OFFICIAL AIRSPACE LEGEND (Req 2.A) ─── */}
-      {showAirspaceLegend && (
-        <div className="absolute bottom-4 left-3 z-10 bg-[#090e1a]/95 backdrop-blur-md border border-[#1f2a40] p-2.5 rounded-lg shadow-2xl max-w-xs text-xs font-mono space-y-1.5">
+      {/* ─── BOTTOM LEFT: OFFICIAL AIRSPACE LEGEND (Requirement 6 - Collapsed chip by default) ─── */}
+      {!showAirspaceLegend ? (
+        <button
+          onClick={() => setShowAirspaceLegend(true)}
+          className="absolute bottom-4 left-3 z-10 bg-[#090e1a]/95 backdrop-blur-md border border-[#1f2a40] px-2.5 py-1.5 rounded-md text-xs font-mono text-cyan-300 flex items-center gap-2 shadow-lg hover:bg-slate-800/90 hover:border-cyan-500/50 transition-all pointer-events-auto"
+          title="Click to expand DigitalSky Airspace Legend"
+          aria-label="Expand Airspace Legend"
+        >
+          <Shield className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="font-bold text-[11px] text-white">AIRSPACE</span>
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700 text-emerald-300 font-bold">
+            VERIFIED ACTIVE
+          </span>
+          <ChevronUp className="w-3 h-3 text-slate-400" />
+        </button>
+      ) : (
+        <div className="absolute bottom-4 left-3 z-10 bg-[#090e1a]/95 backdrop-blur-md border border-[#1f2a40] p-2.5 rounded-lg shadow-2xl max-w-xs text-xs font-mono space-y-1.5 pointer-events-auto">
           <div className="flex items-center justify-between pb-1.5 border-b border-[#1f2a40]">
             <div className="flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5 text-cyan-400" />
@@ -2797,9 +2917,10 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
               <button
                 onClick={() => setShowAirspaceLegend(false)}
                 className="text-slate-500 hover:text-white p-0.5"
-                title="Hide Legend"
+                title="Collapse Legend"
+                aria-label="Collapse Legend"
               >
-                <X className="w-3 h-3" />
+                <ChevronDown className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -2850,17 +2971,6 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {/* Button to re-open Legend if hidden */}
-      {!showAirspaceLegend && (
-        <button
-          onClick={() => setShowAirspaceLegend(true)}
-          className="absolute bottom-4 left-3 z-10 bg-[#090e1a]/90 border border-[#1f2a40] px-2.5 py-1.5 rounded-md text-xs font-mono text-cyan-300 flex items-center gap-1.5 shadow-lg hover:bg-slate-800 transition-colors"
-        >
-          <Shield className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Airspace Legend</span>
-        </button>
       )}
 
       {/* ─── ZONE INSPECTION MODAL / PANEL (Req 2.B) ─── */}
@@ -3009,6 +3119,69 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           <span>FOLLOW</span>
         </button>
       </div>
+
+      {/* ─── MINI-MAP SITUATIONAL OVERVIEW (Requirement 8) ─── */}
+      {showMiniMap && (
+        <div className="absolute bottom-10 right-3 z-20 w-52 h-44 bg-[#090e1a]/95 backdrop-blur-md border border-cyan-500/50 rounded-lg p-2.5 shadow-2xl flex flex-col font-mono text-xs pointer-events-auto">
+          <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-[#1f2a40] text-[10px]">
+            <div className="flex items-center gap-1.5 font-bold text-cyan-300">
+              <MapIcon className="w-3 h-3 text-cyan-400" />
+              <span>MINI-MAP RADAR</span>
+            </div>
+            <button 
+              onClick={() => setShowMiniMap(false)} 
+              className="text-slate-400 hover:text-white p-0.5"
+              aria-label="Close Mini-Map"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="relative flex-1 bg-[#060a12] rounded border border-[#1b273d] overflow-hidden flex items-center justify-center">
+            {/* Concentric radar rings */}
+            <div className="absolute w-32 h-32 rounded-full border border-cyan-500/20 pointer-events-none" />
+            <div className="absolute w-20 h-20 rounded-full border border-cyan-500/30 pointer-events-none" />
+            <div className="absolute w-8 h-8 rounded-full border border-cyan-500/40 pointer-events-none" />
+            {/* Center crosshair */}
+            <div className="absolute w-full h-[1px] bg-cyan-500/20 pointer-events-none" />
+            <div className="absolute h-full w-[1px] bg-cyan-500/20 pointer-events-none" />
+            
+            {/* Drones relative representation */}
+            {drones.map((d) => {
+              const isSelected = d.id === selectedDroneId;
+              const activeDrone = drones.find((dr) => dr.id === selectedDroneId) || drones[0];
+              const relX = ((d.vitals.longitude - (activeDrone ? activeDrone.vitals.longitude : AIRSPACE_CENTER[0])) * 1200) + 95;
+              const relY = (- (d.vitals.latitude - (activeDrone ? activeDrone.vitals.latitude : AIRSPACE_CENTER[1])) * 1200) + 65;
+              const clampedX = Math.max(10, Math.min(180, relX));
+              const clampedY = Math.max(10, Math.min(120, relY));
+
+              return (
+                <div
+                  key={d.id}
+                  onClick={() => onSelectDrone(d.id)}
+                  style={{ left: `${clampedX}px`, top: `${clampedY}px` }}
+                  className={`absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer transition-transform duration-300 ${
+                    isSelected ? 'scale-125 z-10' : 'scale-90 hover:scale-110'
+                  }`}
+                  title={`${d.callsign} (${d.id}) - Alt: ${Math.round(d.vitals.altitudeMeters)}m`}
+                >
+                  <div
+                    className="w-2.5 h-2.5 rounded-full ring-2 ring-slate-950"
+                    style={{ backgroundColor: isSelected ? '#00f0ff' : '#94a3b8' }}
+                  />
+                  {isSelected && (
+                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-[8px] font-bold text-cyan-300 bg-slate-950/80 px-1 rounded whitespace-nowrap">
+                      {d.id}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <div className="absolute bottom-1 right-1 text-[8px] text-slate-500 font-mono">
+              RANGE 5km
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── BOTTOM RIGHT: OPENFREEMAP & OPENSTREETMAP ATTRIBUTION (Requirement 4) ─── */}
       <div className="absolute bottom-2 right-2 z-10 bg-[#080b12]/80 backdrop-blur-sm border border-[#1f2a40]/60 px-2 py-0.5 rounded text-[10px] font-mono text-slate-400 select-none pointer-events-auto flex items-center gap-1.5">

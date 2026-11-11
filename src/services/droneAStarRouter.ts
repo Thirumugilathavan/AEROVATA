@@ -12,6 +12,32 @@ import {
 } from '../types/fleet';
 import { COIMBATORE_DETAILED_OBSTACLES } from '../data/coimbatoreGeoData';
 import { OFFICIAL_COIMBATORE_AIRSPACE_ZONES } from '../data/officialAirspaceData';
+import { 
+  segmentToPolygonDistanceMetric,
+  ExactSegmentCollisionChecker3D
+} from './routePlanning/collisionChecker';
+import { 
+  ObstacleAwarePlanner3D
+} from './routePlanning/obstacleAwarePlanner';
+import { 
+  WorldModel3D, 
+  extractBuildingObstacle3D 
+} from './routePlanning/worldModel';
+import { 
+  aglToAmsl, 
+  amslToAgl, 
+  DEFAULT_ALTITUDE_CONFIG 
+} from './routePlanning/altitudeUtils';
+import { 
+  COIMBATORE_LOCATIONS,
+  DEFAULT_STARTING_LOCATION,
+  SIMULATION_BOUNDS,
+  isCoordinateWithinBounds,
+  NamedLocation
+} from './routePlanning/locations';
+
+// Re-export 3D Route Planning Engine artifacts for full modular architecture
+export * from './routePlanning';
 
 // ─── 1. OFFICIAL REGULATORY ALTITUDE BASELINE & SIMULATION NOTICE ────────────
 export const OFFICIAL_REGULATORY_CONFIG: RegulatoryAltitudeConfig = {
@@ -26,145 +52,8 @@ export const OFFICIAL_REGULATORY_CONFIG: RegulatoryAltitudeConfig = {
   disclaimer: 'Illustrative simulation only. Checkpoint spacing, flight times, and clearances are simulation settings and do not guarantee real-world GNSS navigation accuracy or real autonomous flight authorization. Missing or estimated map data must not be interpreted as proof of clear airspace.',
 };
 
-// ─── 2. PREDEFINED COIMBATORE LOCATION REGISTRY ─────────────────────────────
-export interface NamedLocation {
-  id: string;
-  name: string;
-  shortName: string;
-  category: 'hub' | 'hospital' | 'depot' | 'tech_park' | 'logistics';
-  coordinates: [number, number]; // [lng, lat]
-  altitudeMeters: number;
-  description: string;
-}
-
-export const COIMBATORE_LOCATIONS: NamedLocation[] = [
-  {
-    id: 'loc-cmch-hub',
-    name: 'CMCH Trauma Hub Alpha (Base Station)',
-    shortName: 'CMCH Trauma Hub',
-    category: 'hospital',
-    coordinates: [76.9665, 11.0025],
-    altitudeMeters: 55,
-    description: 'Coimbatore Medical College Hospital central rooftop drone landing pad. Equipped with cold-chain storage and medical trauma dispatch.',
-  },
-  {
-    id: 'loc-peelamedu-depot',
-    name: 'Peelamedu Logistics Depot',
-    shortName: 'Peelamedu Depot',
-    category: 'depot',
-    coordinates: [77.0120, 11.0260],
-    altitudeMeters: 65,
-    description: 'BVLOS transit hub along Avinashi arterial corridor. Automated battery swap docking station.',
-  },
-  {
-    id: 'loc-gandhipuram-hub',
-    name: 'Gandhipuram Central Transit Hub',
-    shortName: 'Gandhipuram Hub',
-    category: 'hub',
-    coordinates: [76.9660, 11.0180],
-    altitudeMeters: 60,
-    description: 'Central urban transit terminal pad serving central business district and retail deliveries.',
-  },
-  {
-    id: 'loc-tidel-park',
-    name: 'TIDEL Park IT SEZ Pad',
-    shortName: 'TIDEL Park IT SEZ',
-    category: 'tech_park',
-    coordinates: [77.0250, 11.0150],
-    altitudeMeters: 65,
-    description: 'IT SEZ high-tech cargo delivery node located on Avinashi Road.',
-  },
-  {
-    id: 'loc-psg-tech',
-    name: 'PSG College of Tech Research Pad',
-    shortName: 'PSG Tech Pad',
-    category: 'tech_park',
-    coordinates: [77.0030, 11.0240],
-    altitudeMeters: 60,
-    description: 'Advanced robotics research facility and university medical laboratory landing site.',
-  },
-  {
-    id: 'loc-kmch-speciality',
-    name: 'KMCH Speciality Hospital (Avinashi Rd)',
-    shortName: 'KMCH Hospital',
-    category: 'hospital',
-    coordinates: [77.0380, 11.0420],
-    altitudeMeters: 65,
-    description: 'Multi-speciality medical trauma hub and organ transport pad on Avinashi corridor.',
-  },
-  {
-    id: 'loc-singanallur-hub',
-    name: 'Singanallur Health Centre Pad',
-    shortName: 'Singanallur Hub',
-    category: 'depot',
-    coordinates: [77.0200, 10.9980],
-    altitudeMeters: 55,
-    description: 'South-east urban dispatch depot serving Trichy Road industrial sector.',
-  },
-  {
-    id: 'loc-rs-puram',
-    name: 'RS Puram West Dispatch Pad',
-    shortName: 'RS Puram Hub',
-    category: 'hub',
-    coordinates: [76.9450, 11.0080],
-    altitudeMeters: 60,
-    description: 'Western residential and commercial supply drop depot.',
-  },
-  {
-    id: 'loc-ganapathy-clinic',
-    name: 'Ganapathy Specialized Clinic & ICU',
-    shortName: 'Ganapathy Clinic',
-    category: 'hospital',
-    coordinates: [76.9830, 11.0360],
-    altitudeMeters: 60,
-    description: 'Northern emergency clinic on Sathy Road corridor.',
-  },
-  {
-    id: 'loc-saravanampatti',
-    name: 'Saravanampatti IT Corridor Depot',
-    shortName: 'Saravanampatti IT',
-    category: 'tech_park',
-    coordinates: [76.9980, 11.0800],
-    altitudeMeters: 65,
-    description: 'Northern IT corridor hub serving tech parks and SEZs.',
-  },
-  {
-    id: 'loc-cbe-north-junction',
-    name: 'Coimbatore North Junction Hub',
-    shortName: 'CBE North Junction',
-    category: 'logistics',
-    coordinates: [76.9530, 11.0280],
-    altitudeMeters: 60,
-    description: 'Railway cargo integration terminal and dispatch node.',
-  },
-  {
-    id: 'loc-ramanathapuram',
-    name: 'Ramanathapuram Transit Pad',
-    shortName: 'Ramanathapuram Hub',
-    category: 'hub',
-    coordinates: [76.9850, 10.9950],
-    altitudeMeters: 55,
-    description: 'South-central cross-corridor node linking Trichy Road and Sungam bypass.',
-  },
-];
-
-export const DEFAULT_STARTING_LOCATION = COIMBATORE_LOCATIONS[0];
-
-export const SIMULATION_BOUNDS = {
-  minLng: 76.9000,
-  maxLng: 77.0900,
-  minLat: 10.9300,
-  maxLat: 11.1100,
-};
-
-export function isCoordinateWithinBounds(lng: number, lat: number): boolean {
-  return (
-    lng >= SIMULATION_BOUNDS.minLng &&
-    lng <= SIMULATION_BOUNDS.maxLng &&
-    lat >= SIMULATION_BOUNDS.minLat &&
-    lat <= SIMULATION_BOUNDS.maxLat
-  );
-}
+// ─── 2. PREDEFINED COIMBATORE LOCATION REGISTRY & BOUNDS ───────────────────
+// Defined in and re-exported from ./routePlanning/locations
 
 // ─── 3. GEOMETRY & PROJECTION UTILITIES ──────────────────────────────────────
 const R_EARTH = 6371000; // meters
@@ -498,11 +387,48 @@ export function validateRouteAgainstConstraints(
     hasUnverifiedData = true;
   }
 
-  // 2. Sample along route polyline (every 25m)
+  // 2. Continuous Segment-Level Checking & Sampling along route polyline
   for (let i = 0; i < coordinates.length - 1; i++) {
     const p1 = coordinates[i];
     const p2 = coordinates[i + 1];
+    const [mx1, my1] = geoToLocalMeters(p1[0], p1[1]);
+    const [mx2, my2] = geoToLocalMeters(p2[0], p2[1]);
     const segDist = getDistanceMeters(p1[1], p1[0], p2[1], p2[0]);
+
+    // Continuous Segment Check against 3D Building Obstacles (Prevents Corner Clipping!)
+    for (const obs of obstacles) {
+      const structHeight = obs.physicalHeightMeters || obs.heightMeters || 40;
+      const vertClearance = cruiseAltMeters - structHeight;
+      if (vertClearance < minVerticalClearanceMeters) {
+        minVerticalClearanceMeters = vertClearance;
+      }
+
+      const buffer = obs.safetyBufferMeters || 35;
+      const vertBuffer = obs.verticalClearanceBufferMeters || 15;
+      const clearsVertically = vertClearance >= vertBuffer;
+
+      if (obs.heightConfidence !== 'verified') {
+        hasUnverifiedData = true;
+      }
+
+      if (!clearsVertically) {
+        const { minDistance, isIntersecting } = segmentToPolygonDistanceMetric([mx1, my1], [mx2, my2], obs.coordinates);
+        if (minDistance < minObstacleClearanceMeters) {
+          minObstacleClearanceMeters = minDistance;
+        }
+
+        if (isIntersecting || minDistance < buffer) {
+          isHardBlocked = true;
+          const msg = minDistance > 0
+            ? `Route clips structure corner buffer: ${obs.name} (Height: ${structHeight}m, Vertical Clearance: ${Math.round(vertClearance)}m, Separation: ${Math.round(minDistance)}m < ${buffer}m buffer)`
+            : `Collision risk with ${obs.name} (Height: ${structHeight}m, Vertical Clearance: ${Math.round(vertClearance)}m, Separation: 0m < ${buffer}m buffer)`;
+          if (!reasons.includes(msg)) {
+            reasons.push(msg);
+          }
+        }
+      }
+    }
+
     const steps = Math.max(1, Math.ceil(segDist / 25));
 
     for (let s = 0; s <= steps; s++) {
@@ -683,6 +609,32 @@ function isLineSegmentClear(
   obstacles: Obstacle[],
   airspaceZones: OfficialAirspaceZone[]
 ): boolean {
+  // 1. Continuous segment check against all 3D building obstacles (prevents corner clipping!)
+  for (const obs of obstacles) {
+    const structHeight = obs.physicalHeightMeters || obs.heightMeters || 40;
+    const vertBuffer = obs.verticalClearanceBufferMeters || 15;
+    const buffer = obs.safetyBufferMeters || safetyMargin;
+    const clearsVertically = (cruiseAlt - structHeight) >= vertBuffer;
+
+    if (!clearsVertically) {
+      const { minDistance, isIntersecting } = segmentToPolygonDistanceMetric([x1, y1], [x2, y2], obs.coordinates);
+      if (isIntersecting || minDistance < buffer) {
+        return false;
+      }
+    }
+  }
+
+  // 2. Continuous segment check against Red Zones
+  for (const zone of airspaceZones) {
+    if (zone.classification === 'RED') {
+      const { minDistance, isIntersecting } = segmentToPolygonDistanceMetric([x1, y1], [x2, y2], zone.coordinates);
+      if (isIntersecting || minDistance < safetyMargin) {
+        return false;
+      }
+    }
+  }
+
+  // 3. Coordinate bounds check along segment
   const dist = Math.hypot(x2 - x1, y2 - y1);
   const steps = Math.ceil(dist / 25);
   for (let s = 1; s < steps; s++) {
@@ -809,7 +761,39 @@ export function calculateDroneMultiRoute(
     };
   }
 
-  // 2. Validate Start & Dest Boundaries and Red Zone
+  // 2. Validate Start & Dest Boundaries, Buildings, and Red Zone
+  const isStartDesignatedPad = COIMBATORE_LOCATIONS.some(
+    (loc) => Math.hypot(loc.coordinates[0] - startLngLat[0], loc.coordinates[1] - startLngLat[1]) < 0.001
+  );
+  const isDestDesignatedPad = COIMBATORE_LOCATIONS.some(
+    (loc) => Math.hypot(loc.coordinates[0] - destLngLat[0], loc.coordinates[1] - destLngLat[1]) < 0.001
+  );
+
+  for (const obs of obstacles) {
+    if (obs.type !== 'highway_flyover') {
+      if (!isDestDesignatedPad && isPointInPolygon(destLngLat, obs.coordinates)) {
+        return {
+          success: false,
+          primaryRoute: null,
+          alternatives: [],
+          allCandidates: [],
+          error: `Arrival denied: Destination is inside building footprint (${obs.name}). Please select a clear landing site outside restricted envelopes.`,
+          simulationNotice: OFFICIAL_REGULATORY_CONFIG.disclaimer,
+        };
+      }
+      if (!isStartDesignatedPad && isPointInPolygon(startLngLat, obs.coordinates)) {
+        return {
+          success: false,
+          primaryRoute: null,
+          alternatives: [],
+          allCandidates: [],
+          error: `Departure denied: Starting location is inside building footprint (${obs.name}).`,
+          simulationNotice: OFFICIAL_REGULATORY_CONFIG.disclaimer,
+        };
+      }
+    }
+  }
+
   const [startMx, startMy] = geoToLocalMeters(startLngLat[0], startLngLat[1]);
   const startSafety = evaluatePointSafety(startMx, startMy, cruiseAlt, safetyMargin, obstacles, airspaceZones);
   if (startSafety.isBlocked && startSafety.sourceType === 'RED_ZONE') {

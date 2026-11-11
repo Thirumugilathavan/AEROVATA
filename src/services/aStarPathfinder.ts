@@ -1,4 +1,5 @@
 import { calculateDroneMultiRoute } from './droneAStarRouter';
+import { segmentToPolygonDistanceMetric } from './routePlanning/collisionChecker';
 // 3D A* Intelligent Autonomous Pathfinding Engine
 // Solves: Continuous 3D Line Segment Traversability + 3D Obstacle Avoidance + Official Airspace Constraints (Red/Yellow/Green Zones)
 // Coordinate System: Local Metric Projection (Meters relative to Airspace Center)
@@ -194,6 +195,32 @@ export function isSegment3DTraversable(
 
   if (dist === 0) {
     return isNodeTraversable(p1[0], p1[1], p1[2], drone, obstacles, zones, otherDrones);
+  }
+
+  // Exact continuous 3D collision check against building obstacles (prevents corner clipping!)
+  for (const obs of obstacles) {
+    const buffer = obs.safetyBufferMeters || 25;
+    const physicalHeight = obs.physicalHeightMeters ?? obs.heightMeters;
+    const vertBuffer = obs.verticalClearanceBufferMeters ?? 15;
+    const bldgTop = physicalHeight + vertBuffer;
+
+    const { minDistance, isIntersecting, tFlight } = segmentToPolygonDistanceMetric([p1[0], p1[1]], [p2[0], p2[1]], obs.coordinates);
+    if (isIntersecting || minDistance < buffer) {
+      const zAtClosest = p1[2] + tFlight * (p2[2] - p1[2]);
+      if (obs.type === 'highway_flyover') {
+        const deckElev = obs.deckElevationMeters ?? physicalHeight;
+        const deckThick = obs.deckThicknessMeters ?? 3.0;
+        const deckTop = deckElev + (deckThick / 2) + vertBuffer;
+        const deckBottom = Math.max(0, deckElev - (deckThick / 2) - 3);
+        if (zAtClosest >= deckBottom && zAtClosest <= deckTop) {
+          return { traversable: false, penalty: Infinity, blockedReason: `ELEVATED VIADUCT DECK COLLISION HAZARD: ${obs.name}` };
+        }
+      } else {
+        if (zAtClosest <= bldgTop) {
+          return { traversable: false, penalty: Infinity, blockedReason: `BUILDING COLLISION HAZARD: ${obs.name}` };
+        }
+      }
+    }
   }
 
   const steps = Math.max(1, Math.ceil(dist / stepMeters));

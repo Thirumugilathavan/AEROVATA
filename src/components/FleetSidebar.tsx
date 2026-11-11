@@ -110,7 +110,7 @@ export const FleetSidebar: React.FC<FleetSidebarProps> = ({
           >
             <Radio className="w-4 h-4 animate-pulse" />
           </button>
-          <span className="text-[9px] font-mono text-slate-500 font-bold uppercase">FLEET</span>
+          <span className="text-[11px] font-mono text-slate-300 font-bold uppercase tracking-wider">FLEET</span>
 
           {/* Quick Add Drone Icon Button */}
           {onOpenAddDrone && (

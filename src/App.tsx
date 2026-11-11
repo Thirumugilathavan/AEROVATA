@@ -22,6 +22,7 @@ import { ApiContractModal } from './components/ApiContractModal';
 import { Px4SitlStatusBanner } from './components/Px4SitlStatusBanner';
 import { Px4SetupModal } from './components/Px4SetupModal';
 import { BottomMissionBar } from './components/BottomMissionBar';
+import { AltitudeProfileStrip } from './components/AltitudeProfileStrip';
 import { AddDroneModal } from './components/AddDroneModal';
 import { apiService } from './services/api/index';
 import type { Mission, MissionTelemetry } from './types/mission';
@@ -650,6 +651,7 @@ export function App() {
         onOpenReplay={() => setIsReplayModalOpen(true)}
         onOpenApiContract={() => setIsApiContractOpen(true)}
         onOpenPx4Setup={() => setIsPx4SetupOpen(true)}
+        engineMode={apiService.getMode()}
       />
 
       {/* PX4 SITL & Gazebo Autopilot Integration Status Banner */}
@@ -717,6 +719,7 @@ export function App() {
                     isMapPickingDestination={isMapPickingDestination}
                     onMapPickDestination={handleMapPickDestination}
                     tempDestinationCoords={mapPickedDestination}
+                    isSimulationMode={apiService.getMode() !== 'http'}
                   />
                 )}
 
@@ -775,6 +778,12 @@ export function App() {
                   </div>
                 )}
               </div>
+
+              {/* Collapsible Flight Altitude & Obstacle Profile Strip (Requirement 1) */}
+              <AltitudeProfileStrip 
+                selectedDrone={selectedDrone} 
+                obstacles={obstacles} 
+              />
 
               {/* Compact Bottom Mission Bar (~46px) */}
               <BottomMissionBar

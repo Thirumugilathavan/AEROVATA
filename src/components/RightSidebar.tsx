@@ -337,85 +337,116 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       {/* ─── 2. COMPACT VERTICAL ICON TOOLBAR (WIDTH: ~56px) ─── */}
       <aside className="w-14 h-full bg-[#090d16] border-l border-[#1a2438] flex flex-col items-center py-2.5 justify-between shrink-0 z-30">
         {/* Top Operational Alerts Button */}
-        <div className="flex flex-col items-center gap-1 w-full px-1.5">
+        {/* Top: Operational Alerts Button */}
+        <div className="flex flex-col items-center gap-1 w-full px-1.5 relative group/item">
           <button
             onClick={() => handleTabClick('alerts')}
             title={`Operational Alerts (${unacknowledgedCount})`}
-            className={`relative group w-11 h-11 rounded-lg flex items-center justify-center transition-all ${
+            aria-label={`Operational Alerts (${unacknowledgedCount} unacknowledged)`}
+            className={`relative w-11 h-11 rounded-lg flex items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 ${
               isExpanded && currentTab === 'alerts'
                 ? 'bg-[#181d2c] border-2 border-rose-500 shadow-[0_0_12px_rgba(239,68,68,0.4)] text-rose-300'
-                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
+                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-300 hover:text-white'
             }`}
           >
-            <ShieldAlert className={`w-5 h-5 ${unacknowledgedCount > 0 ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`} />
+            <ShieldAlert className={`w-5 h-5 ${unacknowledgedCount > 0 ? 'text-rose-400 animate-pulse' : 'text-slate-300'}`} />
             
             {/* Notification Badge */}
             {unacknowledgedCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-rose-600 text-white text-[9px] font-mono font-extrabold w-4 h-4 rounded-full flex items-center justify-center border border-[#090d16] shadow">
+              <span className="absolute -top-1 -right-1 bg-rose-600 text-white text-[10px] font-mono font-extrabold w-4 h-4 rounded-full flex items-center justify-center border border-[#090d16] shadow">
                 {unacknowledgedCount}
               </span>
             )}
           </button>
-          <span className="text-[9px] font-mono text-slate-500 font-bold uppercase">ALERTS</span>
+          <span className="text-[11px] font-mono text-slate-300 font-bold uppercase tracking-wider">ALERTS</span>
+
+          {/* Hover Flyout Label (Requirement 7) */}
+          <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-2.5 py-1 rounded bg-[#0b111e]/98 border border-[#22324f] text-slate-100 text-[11px] font-mono font-bold shadow-xl pointer-events-none opacity-0 group-hover/item:opacity-100 transition-opacity whitespace-nowrap z-50">
+            Alerts &amp; Hazards ({unacknowledgedCount})
+          </div>
         </div>
 
         {/* Middle Tool Selector Stack */}
-        <div className="flex flex-col items-center gap-2.5 my-auto w-full px-1.5">
+        <div className="flex flex-col items-center gap-3 my-auto w-full px-1.5">
           {/* Airspace Zones Button */}
-          <button
-            onClick={() => handleTabClick('airspace')}
-            title="DGCA Airspace Zones Inspector"
-            className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all ${
-              isExpanded && currentTab === 'airspace'
-                ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
-                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
-            }`}
-          >
-            <Shield className="w-4 h-4 text-cyan-400 mb-0.5" />
-            <span className="text-[8px] font-mono font-bold">AIR</span>
-          </button>
+          <div className="relative group/item flex flex-col items-center gap-1 w-full">
+            <button
+              onClick={() => handleTabClick('airspace')}
+              title="DGCA Airspace Zones Inspector"
+              aria-label="DGCA Airspace Zones Inspector"
+              className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                isExpanded && currentTab === 'airspace'
+                  ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
+                  : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-300 hover:text-white'
+              }`}
+            >
+              <Shield className="w-4 h-4 text-cyan-400 mb-0.5" />
+              <span className="text-[11px] font-mono font-bold">AIR</span>
+            </button>
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-2.5 py-1 rounded bg-[#0b111e]/98 border border-[#22324f] text-slate-100 text-[11px] font-mono font-bold shadow-xl pointer-events-none opacity-0 group-hover/item:opacity-100 transition-opacity whitespace-nowrap z-50">
+              Airspace Zones Inspector
+            </div>
+          </div>
 
           {/* Separation Radar Button */}
-          <button
-            onClick={() => handleTabClick('radar')}
-            title="Drone-to-Drone Separation Radar"
-            className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all ${
-              isExpanded && currentTab === 'radar'
-                ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
-                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
-            }`}
-          >
-            <Radar className="w-4 h-4 text-cyan-400 mb-0.5" />
-            <span className="text-[8px] font-mono font-bold">RADAR</span>
-          </button>
+          <div className="relative group/item flex flex-col items-center gap-1 w-full">
+            <button
+              onClick={() => handleTabClick('radar')}
+              title="Drone-to-Drone Separation Radar"
+              aria-label="Drone-to-Drone Separation Radar"
+              className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                isExpanded && currentTab === 'radar'
+                  ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
+                  : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-300 hover:text-white'
+              }`}
+            >
+              <Radar className="w-4 h-4 text-cyan-400 mb-0.5" />
+              <span className="text-[11px] font-mono font-bold">RADAR</span>
+            </button>
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-2.5 py-1 rounded bg-[#0b111e]/98 border border-[#22324f] text-slate-100 text-[11px] font-mono font-bold shadow-xl pointer-events-none opacity-0 group-hover/item:opacity-100 transition-opacity whitespace-nowrap z-50">
+              Separation &amp; Conflict Radar
+            </div>
+          </div>
 
           {/* Active Mission Tracking Button */}
-          <button
-            onClick={() => handleTabClick('missions')}
-            title="Active Mission Tracking"
-            className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all ${
-              isExpanded && currentTab === 'missions'
-                ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
-                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
-            }`}
-          >
-            <Compass className="w-4 h-4 text-cyan-400 mb-0.5" />
-            <span className="text-[8px] font-mono font-bold">MSN</span>
-          </button>
+          <div className="relative group/item flex flex-col items-center gap-1 w-full">
+            <button
+              onClick={() => handleTabClick('missions')}
+              title="Active Mission Tracking"
+              aria-label="Active Mission Tracking"
+              className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                isExpanded && currentTab === 'missions'
+                  ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
+                  : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-300 hover:text-white'
+              }`}
+            >
+              <Compass className="w-4 h-4 text-cyan-400 mb-0.5" />
+              <span className="text-[11px] font-mono font-bold">MSN</span>
+            </button>
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-2.5 py-1 rounded bg-[#0b111e]/98 border border-[#22324f] text-slate-100 text-[11px] font-mono font-bold shadow-xl pointer-events-none opacity-0 group-hover/item:opacity-100 transition-opacity whitespace-nowrap z-50">
+              Active Mission Corridors
+            </div>
+          </div>
 
           {/* System Diagnostics Button */}
-          <button
-            onClick={() => handleTabClick('system')}
-            title="PX4 SITL & System Health"
-            className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all ${
-              isExpanded && currentTab === 'system'
-                ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
-                : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-400 hover:text-white'
-            }`}
-          >
-            <Activity className="w-4 h-4 text-emerald-400 mb-0.5" />
-            <span className="text-[8px] font-mono font-bold">SYS</span>
-          </button>
+          <div className="relative group/item flex flex-col items-center gap-1 w-full">
+            <button
+              onClick={() => handleTabClick('system')}
+              title="PX4 SITL & System Health"
+              aria-label="PX4 SITL & System Health Diagnostics"
+              className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                isExpanded && currentTab === 'system'
+                  ? 'bg-[#142036] border-2 border-cyan-400 shadow-[0_0_12px_rgba(0,240,255,0.4)] text-cyan-300'
+                  : 'bg-[#101524] border border-[#1d2942] hover:bg-[#151c30] text-slate-300 hover:text-white'
+              }`}
+            >
+              <Activity className="w-4 h-4 text-emerald-400 mb-0.5" />
+              <span className="text-[11px] font-mono font-bold">SYS</span>
+            </button>
+            <div className="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-2.5 py-1 rounded bg-[#0b111e]/98 border border-[#22324f] text-slate-100 text-[11px] font-mono font-bold shadow-xl pointer-events-none opacity-0 group-hover/item:opacity-100 transition-opacity whitespace-nowrap z-50">
+              PX4 SITL &amp; System Health
+            </div>
+          </div>
         </div>
 
         {/* Bottom Expand Toggle Button */}
